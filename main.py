@@ -2,13 +2,13 @@ import numpy as np
 from pydub import AudioSegment
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 import wave
 import contextlib
-from transformers import pipeline
-import torch
 from datetime import timedelta
+import groq
+import base64
 
 @dataclass
 class WordSegment:
@@ -16,27 +16,27 @@ class WordSegment:
     start_time: float
     end_time: float
     confidence: float
+    chunk_index: int  # New field to track which chunk this word came from
+
+@dataclass
+class TranscriptionResult:
+    word_segments: List[WordSegment] = field(default_factory=list)
+    word_occurrences: Dict[str, List[int]] = field(default_factory=lambda: {})
 
 class LLMWordSampler:
     def __init__(self, 
                  audio_path: str, 
                  lyrics_path: str, 
                  output_dir: str,
-                 chunk_size: float = 30.0):  # Process 30 seconds at a time
+                 chunk_size: float = 5.0):  # Process 5 seconds at a time
         self.audio_path = audio_path
         self.lyrics_path = lyrics_path
         self.output_dir = output_dir
         self.chunk_size = chunk_size
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        
-        # Initialize the ASR pipeline
-        self.transcriber = pipeline(
-            "automatic-speech-recognition",
-            model="openai/whisper-base",
-            device=self.device,
-            chunk_length_s=self.chunk_size,
-            return_timestamps=True  # Important: get word-level timestamps
-        )
+        self.groq_api_key = os.environ.get("GROQ_API_KEY")
+        if not self.groq_api_key:
+            raise ValueError("GROQ_API_KEY environment variable is not set")
+        self.groq_client = groq.Groq(api_key=self.groq_api_key)
         
         os.makedirs(output_dir, exist_ok=True)
 
@@ -54,26 +54,55 @@ class LLMWordSampler:
             duration = frames / float(rate)
             return duration
 
-    def transcribe_with_timestamps(self) -> List[WordSegment]:
+    def transcribe_with_timestamps(self) -> TranscriptionResult:
         print("Transcribing audio with timestamps...")
         
-        # Run ASR with word timestamps
-        result = self.transcriber(self.audio_path)
+        audio = AudioSegment.from_file(self.audio_path)
+        total_duration = len(audio) / 1000  # Duration in seconds
         
-        # Extract word segments from the chunks
-        word_segments = []
+        result = TranscriptionResult()
         
-        # Whisper returns chunks with word-level timestamps
-        for chunk in result["chunks"]:
-            for word_data in chunk["words"]:
-                word_segments.append(WordSegment(
-                    word=word_data["text"].lower().strip(),
-                    start_time=word_data["start"],
-                    end_time=word_data["end"],
-                    confidence=word_data["confidence"]
-                ))
+        for chunk_index, start_time in enumerate(np.arange(0, total_duration, self.chunk_size)):
+            end_time = min(start_time + self.chunk_size, total_duration)
+            chunk = audio[start_time*1000:end_time*1000]
+            
+            # Export chunk to a temporary file
+            temp_file = "temp_chunk.wav"
+            chunk.export(temp_file, format="wav")
+            
+            # Read the audio chunk and encode it to base64
+            with open(temp_file, "rb") as audio_file:
+                audio_base64 = base64.b64encode(audio_file.read()).decode('utf-8')
+            
+            # Delete the temporary file
+            os.remove(temp_file)
+            
+            # Make the API call to Groq
+            response = self.groq_client.audio.transcriptions.create(
+                model="whisper-large-v3",
+                file=audio_base64,
+                response_format="verbose_json",
+                timestamp_granularities=["word"]
+            )
+            
+            # Extract word segments from the response
+            for segment in response.words:
+                word = segment.word.lower().strip()
+                word_segment = WordSegment(
+                    word=word,
+                    start_time=segment.start + start_time,
+                    end_time=segment.end + start_time,
+                    confidence=getattr(segment, 'confidence', 1.0),  # Default to 1.0 if not provided
+                    chunk_index=chunk_index
+                )
+                result.word_segments.append(word_segment)
+                
+                # Track word occurrences
+                if word not in result.word_occurrences:
+                    result.word_occurrences[word] = []
+                result.word_occurrences[word].append(chunk_index)
         
-        return word_segments
+        return result
 
     def match_lyrics_to_segments(self, 
                                lyrics: List[str], 
@@ -149,11 +178,11 @@ class LLMWordSampler:
         lyrics = self.load_lyrics()
         
         print("Starting transcription process...")
-        segments = self.transcribe_with_timestamps()
+        transcription_result = self.transcribe_with_timestamps()
         
-        print(f"Found {len(segments)} word segments")
+        print(f"Found {len(transcription_result.word_segments)} word segments")
         print("Matching lyrics to transcribed segments...")
-        word_matches = self.match_lyrics_to_segments(lyrics, segments)
+        word_matches = self.match_lyrics_to_segments(lyrics, transcription_result.word_segments)
         
         print("Extracting matched samples...")
         self.extract_samples(word_matches)
@@ -166,6 +195,11 @@ class LLMWordSampler:
         print(f"Total lyrics words: {len(lyrics)}")
         print(f"Total matched segments: {total_matches}")
         print(f"Average matches per word: {total_matches/len(lyrics):.1f}")
+        
+        # Print word occurrence information
+        print("\nWord occurrences by chunk:")
+        for word, chunks in transcription_result.word_occurrences.items():
+            print(f"'{word}': recognized in chunks {chunks}")
 
 # Example usage
 if __name__ == "__main__":
