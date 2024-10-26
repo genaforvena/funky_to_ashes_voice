@@ -3,12 +3,15 @@ from pydub import AudioSegment
 import json
 import os
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import wave
 import contextlib
 from datetime import timedelta
 import groq
 import base64
+import io
+import librosa
+import scipy.signal as signal
 
 @dataclass
 class WordSegment:
@@ -66,41 +69,42 @@ class LLMWordSampler:
             end_time = min(start_time + self.chunk_size, total_duration)
             chunk = audio[start_time*1000:end_time*1000]
             
-            # Export chunk to a temporary file
-            temp_file = "temp_chunk.wav"
-            chunk.export(temp_file, format="wav")
+            # Export chunk to a bytes buffer
+            buffer = io.BytesIO()
+            chunk.export(buffer, format="wav")
+            buffer.seek(0)
             
-            # Read the audio chunk and encode it to base64
-            with open(temp_file, "rb") as audio_file:
-                audio_base64 = base64.b64encode(audio_file.read()).decode('utf-8')
-            
-            # Delete the temporary file
-            os.remove(temp_file)
+            # Create a named file-like object
+            file_obj = ("audio.wav", buffer, "audio/wav")
             
             # Make the API call to Groq
             response = self.groq_client.audio.transcriptions.create(
                 model="whisper-large-v3",
-                file=audio_base64,
-                response_format="verbose_json",
-                timestamp_granularities=["word"]
+                file=file_obj,
+                response_format="verbose_json"
             )
             
             # Extract word segments from the response
-            for segment in response.words:
-                word = segment.word.lower().strip()
-                word_segment = WordSegment(
-                    word=word,
-                    start_time=segment.start + start_time,
-                    end_time=segment.end + start_time,
-                    confidence=getattr(segment, 'confidence', 1.0),  # Default to 1.0 if not provided
-                    chunk_index=chunk_index
-                )
-                result.word_segments.append(word_segment)
-                
-                # Track word occurrences
-                if word not in result.word_occurrences:
-                    result.word_occurrences[word] = []
-                result.word_occurrences[word].append(chunk_index)
+            # Assuming the response is a dictionary with a 'segments' key
+            segments = response.segments if hasattr(response, 'segments') else []
+            
+            for segment in segments:
+                words = segment.words if hasattr(segment, 'words') else []
+                for word_info in words:
+                    word = word_info.word.lower().strip()
+                    word_segment = WordSegment(
+                        word=word,
+                        start_time=word_info.start + start_time,
+                        end_time=word_info.end + start_time,
+                        confidence=getattr(word_info, 'confidence', 1.0),  # Default to 1.0 if not provided
+                        chunk_index=chunk_index
+                    )
+                    result.word_segments.append(word_segment)
+                    
+                    # Track word occurrences
+                    if word not in result.word_occurrences:
+                        result.word_occurrences[word] = []
+                    result.word_occurrences[word].append(chunk_index)
         
         return result
 
@@ -126,7 +130,36 @@ class LLMWordSampler:
         
         return word_matches
 
-    def extract_samples(self, word_matches: Dict[str, List[WordSegment]]):
+    def detect_voice_activity(self, audio_array, sample_rate):
+        """Detect voice activity in the audio."""
+        frame_length = int(sample_rate * 0.025)  # 25ms frames
+        hop_length = frame_length // 2  # 50% overlap
+        energy = librosa.feature.rms(y=audio_array, frame_length=frame_length, hop_length=hop_length)[0]
+        threshold = np.mean(energy) * 1.5
+        voice_activity = energy > threshold
+        
+        # Upsample voice_activity to match audio_array length
+        return np.repeat(voice_activity, hop_length)[:len(audio_array)]
+
+    def find_audio_peaks(self, audio_array, sample_rate, voice_activity):
+        """Find peaks in the audio envelope within voice segments."""
+        envelope = np.abs(signal.hilbert(audio_array))
+        peaks, _ = signal.find_peaks(envelope, distance=int(sample_rate * 0.1))  # At least 100ms apart
+        return peaks[voice_activity[peaks]]
+
+    def align_peaks_with_words(self, peaks, word_segments, sample_rate):
+        """Align audio peaks with transcribed word segments."""
+        aligned_words = []
+        for word_segment in word_segments:
+            start_sample = int(word_segment.start_time * sample_rate)
+            end_sample = int(word_segment.end_time * sample_rate)
+            word_peaks = peaks[(peaks >= start_sample) & (peaks <= end_sample)]
+            if len(word_peaks) > 0:
+                peak_time = word_peaks[0] / sample_rate
+                aligned_words.append((word_segment.word, peak_time))
+        return aligned_words
+
+    def extract_samples(self, word_matches: Dict[str, List[WordSegment]], aligned_words: List[Tuple[str, float]]):
         print("Extracting word samples...")
         audio = AudioSegment.from_mp3(self.audio_path)
         
@@ -144,13 +177,13 @@ class LLMWordSampler:
             # Use the segment with highest confidence
             best_segment = max(segments, key=lambda x: x.confidence)
             
-            # Convert times to milliseconds
-            start_ms = max(0, int(best_segment.start_time * 1000) - pad_start)
-            end_ms = int(best_segment.end_time * 1000)
+            # Find the closest aligned peak
+            closest_peak = min(aligned_words, key=lambda x: abs(x[1] - best_segment.start_time))
+            peak_time = closest_peak[1]
             
-            # Ensure minimum length
-            if end_ms - start_ms < min_length:
-                end_ms = start_ms + min_length
+            # Convert times to milliseconds
+            start_ms = max(0, int(peak_time * 1000) - pad_start)
+            end_ms = start_ms + min_length
             
             # Extract audio segment
             word_audio = audio[start_ms:end_ms]
@@ -163,10 +196,10 @@ class LLMWordSampler:
             # Store metadata
             metadata[word] = {
                 'filename': filename,
-                'start_time': best_segment.start_time,
-                'end_time': best_segment.end_time,
+                'start_time': peak_time,
+                'end_time': peak_time + (min_length / 1000),
                 'confidence': best_segment.confidence,
-                'duration': (end_ms - start_ms) / 1000.0
+                'duration': min_length / 1000
             }
         
         # Save metadata
@@ -184,8 +217,18 @@ class LLMWordSampler:
         print("Matching lyrics to transcribed segments...")
         word_matches = self.match_lyrics_to_segments(lyrics, transcription_result.word_segments)
         
+        print("Loading audio and detecting voice activity...")
+        audio_array, sample_rate = librosa.load(self.audio_path)
+        voice_activity = self.detect_voice_activity(audio_array, sample_rate)
+
+        print("Finding audio peaks...")
+        peaks = self.find_audio_peaks(audio_array, sample_rate, voice_activity)
+
+        print("Aligning peaks with words...")
+        aligned_words = self.align_peaks_with_words(peaks, transcription_result.word_segments, sample_rate)
+
         print("Extracting matched samples...")
-        self.extract_samples(word_matches)
+        self.extract_samples(word_matches, aligned_words)
         
         print(f"Done! Word samples saved to {self.output_dir}")
         
@@ -204,8 +247,8 @@ class LLMWordSampler:
 # Example usage
 if __name__ == "__main__":
     sampler = LLMWordSampler(
-        audio_path="song.mp3",
-        lyrics_path="lyrics.txt",
+        audio_path="1.mp3",
+        lyrics_path="1.txt",
         output_dir="word_samples"
     )
     sampler.process()

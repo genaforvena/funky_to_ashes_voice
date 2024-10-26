@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+1.mp3
+1.txt
+word_samples/
+
 # C extensions
 *.so
 
