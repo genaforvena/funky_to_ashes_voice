@@ -186,11 +186,11 @@ class LLMWordSampler:
 # Example usage
 if __name__ == "__main__":
     anchor_info = {
-        "I switched the time zone": (25.0, 30.0)
+        "Bass for your face, London!": (0.0, 3.0)
     }
     sampler = LLMWordSampler(
-        audio_path="1.mp3",
-        lyrics_path="1.txt",
+        audio_path="2.mp3",
+        lyrics_path="2.txt",
         output_dir="word_samples",
         anchor_info=anchor_info
     )
