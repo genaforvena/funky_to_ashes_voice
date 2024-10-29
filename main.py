@@ -1,197 +1,206 @@
-import numpy as np
-from pydub import AudioSegment
-import json
-import os
-from typing import List, Dict, Tuple
-import librosa
-from scipy.spatial.distance import cosine
-from scipy.interpolate import interp1d
+from dataclasses import dataclass
+from typing import List, Dict, Optional, Tuple
+from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.formatters import TextFormatter
+from pytube import YouTube
+import logging
+import time
 
-class LLMWordSampler:
-    def __init__(self, audio_path: str, lyrics_path: str, output_dir: str, anchor_info: Dict[str, Tuple[float, float]]):
-        self.audio_path = audio_path
-        self.lyrics_path = lyrics_path
-        self.output_dir = output_dir
-        self.anchor_info = anchor_info
-        os.makedirs(output_dir, exist_ok=True)
+@dataclass
+class CaptionResult:
+    video_id: str
+    captions: Optional[List[Dict]]
+    source: str  # 'api_direct', 'api_manual', 'fallback'
+    error: Optional[str] = None
 
-    def load_lyrics(self) -> List[str]:
-        with open(self.lyrics_path, 'r') as f:
-            lyrics = f.read().lower()
-            words = [word.strip('.,!?-"\'()[]{}') for word in lyrics.split()]
-            return [w for w in words if w]
+class EnhancedCaptionFetcher:
+    def __init__(self, max_retries: int = 3, retry_delay: float = 1.0):
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.logger = self._setup_logger()
 
-    def detect_voice_segments(self, audio_array: np.ndarray, sample_rate: int) -> List[Tuple[int, int]]:
-        frame_length = int(sample_rate * 0.025)  # 25ms frames
-        hop_length = frame_length // 2  # 50% overlap
-        energy = librosa.feature.rms(y=audio_array, frame_length=frame_length, hop_length=hop_length)[0]
-        threshold = np.mean(energy) * 1.5
-        voice_activity = energy > threshold
+    def _setup_logger(self) -> logging.Logger:
+        logger = logging.getLogger('CaptionFetcher')
+        logger.setLevel(logging.INFO)
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+        return logger
 
-        segments = []
-        start = None
-        for i, active in enumerate(voice_activity):
-            if active and start is None:
-                start = i * hop_length
-            elif not active and start is not None:
-                end = i * hop_length
-                segments.append((start, end))
-                start = None
+    def _try_direct_api(self, video_id: str) -> Optional[List[Dict]]:
+        """Attempt to fetch captions directly using the API."""
+        try:
+            captions = YouTubeTranscriptApi.get_transcript(
+                video_id,
+                languages=['en', 'en-GB', 'en-US'],
+                preserve_formatting=True
+            )
+            return captions
+        except Exception as e:
+            self.logger.debug(f"Direct API attempt failed: {str(e)}")
+            return None
 
-        if start is not None:
-            segments.append((start, len(audio_array)))
-
-        return segments
-
-    def extract_samples(self, words: List[str], segments: List[Tuple[int, int]], audio: AudioSegment):
-        metadata = {}
-        audio_duration = len(audio) / 1000.0  # Duration in seconds
-
-        for anchor_phrase, (start_time, end_time) in self.anchor_info.items():
-            anchor_words = anchor_phrase.lower().split()
-            anchor_index = words.index(anchor_words[0])
+    def _try_manual_language_selection(self, video_id: str) -> Optional[List[Dict]]:
+        """Try to fetch captions by manually finding available transcripts."""
+        try:
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             
-            # Calculate time scaling factor
-            time_range = end_time - start_time
-            word_count = len(anchor_words)
-            time_per_word = time_range / word_count
+            # First try English variants
+            for lang in ['en', 'en-GB', 'en-US']:
+                try:
+                    transcript = transcript_list.find_generated_transcript([lang])
+                    return transcript.fetch()
+                except:
+                    continue
 
-            for i, word in enumerate(words[anchor_index:]):
-                word_start = start_time + i * time_per_word
-                word_end = word_start + time_per_word
+            # If no English auto-generated, try any English
+            for lang in ['en', 'en-GB', 'en-US']:
+                try:
+                    transcript = transcript_list.find_transcript([lang])
+                    return transcript.fetch()
+                except:
+                    continue
 
-                if word_end > audio_duration:
+            # Last resort: try to get any transcript and translate to English
+            try:
+                transcript = transcript_list.find_transcript(['en'])
+                translated = transcript.translate('en')
+                return translated.fetch()
+            except:
+                return None
+
+        except Exception as e:
+            self.logger.debug(f"Manual language selection failed: {str(e)}")
+            return None
+
+    def _try_pytube_fallback(self, video_id: str) -> Optional[List[Dict]]:
+        """Try to fetch captions using pytube as a fallback."""
+        try:
+            yt = YouTube(f'https://youtube.com/watch?v={video_id}')
+            captions_dict = yt.captions
+            
+            # Try to get English captions using dictionary access
+            caption_track = None
+            for code, caption in captions_dict.items():
+                if code.startswith('en'):
+                    caption_track = caption
                     break
-
-                start_ms = int(word_start * 1000)
-                end_ms = int(word_end * 1000)
-
-                # Extract audio segment
-                word_audio = audio[start_ms:end_ms]
-
-                # Save sample
-                if word not in metadata:
-                    metadata[word] = []
-                
-                filename = f"{word}_{len(metadata[word])}.wav"
-                filepath = os.path.join(self.output_dir, filename)
-                word_audio.export(filepath, format="wav")
-
-                # Store metadata
-                metadata[word].append({
-                    'filename': filename,
-                    'start_time': word_start,
-                    'end_time': word_end,
-                    'duration': word_end - word_start
-                })
-
-        # Save metadata
-        with open(os.path.join(self.output_dir, 'metadata.json'), 'w') as f:
-            json.dump(metadata, f, indent=2)
-
-        return metadata
-
-    def compare_spectrograms(self, samples: List[Dict]) -> str:
-        spectrograms = []
-        max_length = 0
-        for sample in samples:
-            audio, sr = librosa.load(os.path.join(self.output_dir, sample['filename']))
-            n_fft = min(2048, len(audio))
-            hop_length = n_fft // 4
-            spectrogram = librosa.feature.melspectrogram(y=audio, sr=sr, n_mels=128, n_fft=n_fft, hop_length=hop_length)
-            spectrograms.append(spectrogram)
-            max_length = max(max_length, spectrogram.shape[1])
-
-        # Pad or truncate spectrograms to the same length
-        target_length = 100  # You can adjust this value
-        padded_spectrograms = []
-        for spectrogram in spectrograms:
-            if spectrogram.shape[1] < target_length:
-                padded = np.pad(spectrogram, ((0, 0), (0, target_length - spectrogram.shape[1])), mode='constant')
-            else:
-                padded = spectrogram[:, :target_length]
-            padded_spectrograms.append(padded.flatten())
-
-        best_sample = samples[0]['filename']
-        if len(padded_spectrograms) > 1:
-            similarities = []
-            for i, spec1 in enumerate(padded_spectrograms):
-                sim = sum(1 - cosine(spec1, spec2) for j, spec2 in enumerate(padded_spectrograms) if i != j)
-                similarities.append(sim)
-            best_index = np.argmax(similarities)
-            best_sample = samples[best_index]['filename']
-
-        return best_sample
-
-    def select_best_samples(self, metadata: Dict[str, List[Dict]]) -> Dict[str, Dict]:
-        best_samples = {}
-        for word, samples in metadata.items():
-            if len(samples) > 1:
-                # Calculate the average amplitude for each sample
-                amplitudes = []
-                for sample in samples:
-                    audio = AudioSegment.from_wav(os.path.join(self.output_dir, sample['filename']))
-                    amplitudes.append(audio.rms)
-                
-                # Select the sample with the median amplitude
-                median_index = len(amplitudes) // 2
-                sorted_indices = sorted(range(len(amplitudes)), key=lambda k: amplitudes[k])
-                best_sample = samples[sorted_indices[median_index]]
-            else:
-                best_sample = samples[0]
             
-            best_samples[word] = best_sample
-        return best_samples
+            if caption_track:
+                # Convert pytube captions to youtube_transcript_api format
+                xml_captions = caption_track.xml_captions
+                srt_captions = caption_track.generate_srt_captions()
+                
+                # Parse SRT format into list of dictionaries
+                parsed_captions = []
+                current_time = 0.0
+                
+                for line in srt_captions.split('\n\n'):
+                    if line.strip():
+                        parts = line.split('\n')
+                        if len(parts) >= 3:
+                            timing = parts[1].split(' --> ')
+                            start_time = self._convert_timestamp_to_seconds(timing[0])
+                            text = ' '.join(parts[2:])
+                            
+                            parsed_captions.append({
+                                'text': text,
+                                'start': start_time,
+                                'duration': 0  # We'll calculate this in post-processing
+                            })
+                
+                # Post-process to add durations
+                for i in range(len(parsed_captions) - 1):
+                    parsed_captions[i]['duration'] = (
+                        parsed_captions[i + 1]['start'] - parsed_captions[i]['start']
+                    )
+                
+                # Set a default duration for the last caption
+                if parsed_captions:
+                    parsed_captions[-1]['duration'] = 5.0
+                
+                return parsed_captions
+            
+            self.logger.debug(f"No English captions found for video {video_id}")
+            return None
+                
+        except Exception as e:
+            self.logger.debug(f"Pytube fallback failed: {str(e)}")
+            return None
 
-    def assemble_audio(self, lyrics: List[str], best_samples: Dict[str, Dict]):
-        print("Assembling audio from best samples...")
-        assembled_audio = AudioSegment.silent(duration=0)
-        
-        for word in lyrics:
-            if word in best_samples:
-                word_audio = AudioSegment.from_wav(os.path.join(self.output_dir, best_samples[word]['filename']))
-                assembled_audio += word_audio
-            else:
-                # If word not found, add a short silence
-                assembled_audio += AudioSegment.silent(duration=100)  # 100ms silence for missing words
-        
-        # Export the assembled audio
-        output_path = os.path.join(self.output_dir, "assembled_audio.wav")
-        assembled_audio.export(output_path, format="wav")
-        print(f"Assembled audio saved to: {output_path}")
+    def _convert_timestamp_to_seconds(self, timestamp: str) -> float:
+        """Convert SRT timestamp to seconds."""
+        hours, minutes, seconds = timestamp.replace(',', '.').split(':')
+        return float(hours) * 3600 + float(minutes) * 60 + float(seconds)
 
-    def process(self):
-        print("Loading lyrics...")
-        words = self.load_lyrics()
+    def get_captions(self, video_id: str) -> CaptionResult:
+        """
+        Main method to fetch captions using multiple strategies.
+        Returns a CaptionResult with the captions and metadata about how they were obtained.
+        """
+        self.logger.info(f"Fetching captions for video {video_id}")
 
-        print("Loading audio...")
-        audio = AudioSegment.from_file(self.audio_path)
+        # Try each method in sequence
+        for attempt in range(self.max_retries):
+            # 1. Try direct API access
+            captions = self._try_direct_api(video_id)
+            if captions:
+                return CaptionResult(video_id, captions, 'api_direct')
 
-        print("Extracting word samples based on anchor information...")
-        metadata = self.extract_samples(words, [], audio)
+            # 2. Try manual language selection
+            captions = self._try_manual_language_selection(video_id)
+            if captions:
+                return CaptionResult(video_id, captions, 'api_manual')
 
-        print("Selecting best samples...")
-        best_samples = self.select_best_samples(metadata)
+            # 3. Try pytube fallback
+            captions = self._try_pytube_fallback(video_id)
+            if captions:
+                return CaptionResult(video_id, captions, 'fallback')
 
-        print(f"Done! Word samples saved to {self.output_dir}")
+            # If all methods failed, wait before retrying
+            if attempt < self.max_retries - 1:
+                time.sleep(self.retry_delay)
 
-        # Print summary
-        print(f"\nSummary:")
-        print(f"Total lyrics words: {len(words)}")
-        print(f"Unique words with samples: {len(best_samples)}")
+        # If all attempts failed
+        return CaptionResult(
+            video_id=video_id,
+            captions=None,
+            source='none',
+            error="Failed to fetch captions using all available methods"
+        )
 
-        # Assemble audio from best samples
-        self.assemble_audio(words, best_samples)
+    def debug_available_captions(self, video_id: str) -> None:
+        """
+        Debug method to print information about available captions.
+        """
+        try:
+            yt = YouTube(f'https://youtube.com/watch?v={video_id}')
+            captions_dict = yt.captions
+            
+            self.logger.info(f"Available caption tracks for video {video_id}:")
+            for code, caption in captions_dict.items():
+                self.logger.info(f"Language code: {code}")
+                
+        except Exception as e:
+            self.logger.error(f"Error checking available captions: {str(e)}")
 
-# Example usage
+def get_captions(video_id: str) -> List[Dict]:
+    """
+    Drop-in replacement for the original get_captions function.
+    Returns captions in the same format as the original function or None if not found.
+    """
+    fetcher = EnhancedCaptionFetcher()
+    
+    # Debug available captions
+    fetcher.debug_available_captions(video_id)
+    
+    result = fetcher.get_captions(video_id)
+    return result.captions
+
+
 if __name__ == "__main__":
-    anchor_info = {
-        "Bass for your face, London!": (0.0, 3.0)
-    }
-    sampler = LLMWordSampler(
-        audio_path="2.mp3",
-        lyrics_path="2.txt",
-        output_dir="word_samples",
-        anchor_info=anchor_info
-    )
-    sampler.process()
+    video_id = "ZM5_6js19eM"
+    captions = get_captions(video_id)
+    print(captions)

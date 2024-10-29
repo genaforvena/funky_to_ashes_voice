@@ -6,6 +6,7 @@ __pycache__/
 1.mp3
 1.txt
 word_samples/
+output/
 
 # C extensions
 *.so
