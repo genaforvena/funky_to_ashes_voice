@@ -6,59 +6,71 @@ from datetime import timedelta
 from get_captions import get_captions
 
 class PhraseExtractor:
-    def __init__(self, phrases: List[str], context_seconds: int = 5, max_phrase_gap: float = 2.0):
+    def __init__(self, phrases: List[str], context_seconds: int = 5):
         """
         Initialize the phrase extractor
         
         Args:
             phrases: List of phrases to search for
             context_seconds: Number of seconds before and after the match to include in clips
-            max_phrase_gap: Maximum time gap (in seconds) between caption segments to consider them connected
         """
         self.phrases = [phrase.lower() for phrase in phrases]
         self.context_seconds = context_seconds
-        self.max_phrase_gap = max_phrase_gap
-        
-    def create_caption_windows(self, captions: List[Dict]) -> List[Dict]:
+
+    def create_merged_text_and_mappings(self, captions: List[Dict]) -> Tuple[str, List[Tuple[int, float]]]:
         """
-        Create sliding windows of concatenated captions to detect split phrases
+        Create a single string from all captions while maintaining character to timestamp mappings
         
         Args:
             captions: List of caption dictionaries with 'text' and 'start' keys
             
         Returns:
-            List of dictionaries containing merged caption windows
+            Tuple of (merged_text, list of (character_index, timestamp) mappings)
         """
-        windows = []
+        merged_text = ""
+        char_mappings = []  # List of (char_index, timestamp) tuples
         
-        for i in range(len(captions)):
-            current_window = {
-                'text': captions[i]['text'],
-                'start': captions[i]['start'],
-                'end': captions[i].get('end', captions[i]['start'] + 5),  # Default 5 sec if no end time
-                'segments': [i]
-            }
+        for caption in captions:
+            # Store mapping for the start of this caption text
+            char_mappings.append((len(merged_text), float(caption['start'])))
             
-            # Look ahead and merge with subsequent captions if they're close enough
-            j = i + 1
-            while j < len(captions):
-                time_gap = float(captions[j]['start']) - float(current_window['end'])
-                
-                if time_gap > self.max_phrase_gap:
-                    break
-                    
-                current_window['text'] += ' ' + captions[j]['text']
-                current_window['end'] = captions[j].get('end', float(captions[j]['start']) + 5)
-                current_window['segments'].append(j)
-                j += 1
-                
-            windows.append(current_window)
+            # Add the caption text with a space to separate captions
+            merged_text += caption['text'] + " "
+        
+        # Add a final mapping for the end of the text
+        if captions:
+            last_caption = captions[-1]
+            end_time = last_caption.get('end', float(last_caption['start']) + 5)  # Default 5 sec if no end time
+            char_mappings.append((len(merged_text), end_time))
             
-        return windows
+        return merged_text.lower(), char_mappings
+
+    def find_timestamp_for_position(self, position: int, char_mappings: List[Tuple[int, float]]) -> float:
+        """
+        Find the timestamp for a given character position using the mappings
+        
+        Args:
+            position: Character position in the merged text
+            char_mappings: List of (char_index, timestamp) tuples
+            
+        Returns:
+            Estimated timestamp for the character position
+        """
+        # Find the two mappings that bracket this position
+        for i in range(len(char_mappings) - 1):
+            start_idx, start_time = char_mappings[i]
+            end_idx, end_time = char_mappings[i + 1]
+            
+            if start_idx <= position < end_idx:
+                # Linear interpolation between the two timestamps
+                char_progress = (position - start_idx) / (end_idx - start_idx)
+                return start_time + (end_time - start_time) * char_progress
+                
+        return char_mappings[-1][1]  # Return last timestamp if position is beyond end
 
     def find_matches(self, captions: List[Dict]) -> List[Tuple[str, float, str, float]]:
         """
-        Find timestamps where phrases appear in captions, including split phrases
+        Find timestamps where phrases appear in captions
         
         Args:
             captions: List of caption dictionaries with 'text' and 'start' keys
@@ -66,31 +78,32 @@ class PhraseExtractor:
         Returns:
             List of tuples containing (matched_phrase, start_time, context, end_time)
         """
+        merged_text, char_mappings = self.create_merged_text_and_mappings(captions)
         matches = []
-        caption_windows = self.create_caption_windows(captions)
+        print("Merged text: ", merged_text)
+        print("Char mappings: ", char_mappings)
+        print("Phrases: ", self.phrases)
+        print("Context seconds: ", self.context_seconds)
         
-        for window in caption_windows:
-            window_text = window['text'].lower()
-            
-            for phrase in self.phrases:
-                if phrase in window_text:
-                    # Calculate the relative position of the phrase in the window text
-                    # to get a more accurate timestamp
-                    phrase_pos = window_text.find(phrase)
-                    chars_before = len(window_text[:phrase_pos])
-                    total_chars = len(window_text)
+        for phrase in self.phrases:
+            start_pos = 0
+            while True:
+                # Find the next occurrence of the phrase
+                pos = merged_text.find(phrase, start_pos)
+                if pos == -1:
+                    break
                     
-                    # Estimate the timestamp based on position in the text
-                    time_span = float(window['end']) - float(window['start'])
-                    relative_time = time_span * (chars_before / total_chars)
-                    match_timestamp = float(window['start']) + relative_time
-                    
-                    matches.append((
-                        phrase,
-                        match_timestamp,
-                        window['text'],  # Original case preserved for context
-                        float(window['end'])
-                    ))
+                # Get timestamps for the start and end of the phrase
+                start_time = self.find_timestamp_for_position(pos, char_mappings)
+                end_time = self.find_timestamp_for_position(pos + len(phrase), char_mappings)
+                
+                # Extract context (original case) from nearby captions
+                context_start = max(0, pos - 50)
+                context_end = min(len(merged_text), pos + len(phrase) + 50)
+                context = merged_text[context_start:context_end]
+                
+                matches.append((phrase, start_time, context, end_time))
+                start_pos = pos + 1  # Look for next occurrence
         
         return matches
 
@@ -149,7 +162,7 @@ class PhraseExtractor:
         return clip_paths
 
 def process_videos(video_ids: List[str], search_phrases: List[str], 
-                  output_dir: str = 'output', max_phrase_gap: float = 2.0) -> Dict[str, List[Dict]]:
+                  output_dir: str = 'output') -> Dict[str, List[Dict]]:
     """
     Main function to process multiple videos and find phrases
     
@@ -157,14 +170,13 @@ def process_videos(video_ids: List[str], search_phrases: List[str],
         video_ids: List of YouTube video IDs
         search_phrases: List of phrases to find
         output_dir: Directory to save output files
-        max_phrase_gap: Maximum time gap between captions to consider them connected
         
     Returns:
         Dictionary mapping video IDs to lists of matches with clip information
     """
     os.makedirs(output_dir, exist_ok=True)
     
-    extractor = PhraseExtractor(search_phrases, max_phrase_gap=max_phrase_gap)
+    extractor = PhraseExtractor(search_phrases)
     results = {}
     
     for video_id in video_ids:
@@ -206,9 +218,9 @@ def process_videos(video_ids: List[str], search_phrases: List[str],
 # Example usage:
 if __name__ == "__main__":
     video_ids = ["ZM5_6js19eM", "SsKT0s5J8ko"]
-    search_phrases = ["switched the time zone", "could find me"]
+    search_phrases = ["I could fly home", "I remember it all"]
     
-    results = process_videos(video_ids, search_phrases, max_phrase_gap=2.0)
+    results = process_videos(video_ids, search_phrases)
     
     # Print results
     for video_id, matches in results.items():
