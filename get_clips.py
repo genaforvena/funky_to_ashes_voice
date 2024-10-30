@@ -6,16 +6,18 @@ from datetime import timedelta
 from get_captions import get_captions
 
 class PhraseExtractor:
-    def __init__(self, phrases: List[str], context_seconds: int = 5):
+    def __init__(self, phrases: List[str], lead_seconds: int = 0, trail_seconds: int = 2):
         """
         Initialize the phrase extractor
         
         Args:
             phrases: List of phrases to search for
-            context_seconds: Number of seconds before and after the match to include in clips
+            lead_seconds: Number of seconds before the match to include in clips
+            trail_seconds: Number of seconds after the match to include in clips
         """
         self.phrases = [phrase.lower() for phrase in phrases]
-        self.context_seconds = context_seconds
+        self.lead_seconds = lead_seconds
+        self.trail_seconds = trail_seconds
 
     def create_merged_text_and_mappings(self, captions: List[Dict]) -> Tuple[str, List[Tuple[int, float]]]:
         """
@@ -80,10 +82,6 @@ class PhraseExtractor:
         """
         merged_text, char_mappings = self.create_merged_text_and_mappings(captions)
         matches = []
-        print("Merged text: ", merged_text)
-        print("Char mappings: ", char_mappings)
-        print("Phrases: ", self.phrases)
-        print("Context seconds: ", self.context_seconds)
         
         for phrase in self.phrases:
             start_pos = 0
@@ -136,7 +134,7 @@ class PhraseExtractor:
     def extract_clips(self, audio_path: str, matches: List[Tuple[str, float, str, float]], 
                      output_dir: str) -> List[str]:
         """
-        Extract audio clips around each match
+        Extract audio clips around each match with adjusted timing window
         
         Args:
             audio_path: Path to the full audio file
@@ -151,18 +149,25 @@ class PhraseExtractor:
         
         for i, (phrase, start_time, _, end_time) in enumerate(matches):
             # Calculate clip boundaries
-            clip_start = max(0, int((start_time - self.context_seconds) * 1000))
-            clip_end = int((end_time + self.context_seconds) * 1000)
+            # Start 4 seconds before the phrase starts
+            clip_start = max(0, int((start_time - self.lead_seconds) * 1000))
+            # End 2 seconds after the phrase ends
+            clip_end = int((end_time + self.trail_seconds) * 1000)
             
             clip = audio[clip_start:clip_end]
-            clip_path = f'{output_dir}/clip_{i}_{phrase.replace(" ", "_")}.mp3'
+            
+            # Generate a filename that includes timing information
+            timestamp = str(timedelta(seconds=int(start_time))).replace(':', '-')
+            clip_path = f'{output_dir}/clip_{timestamp}_{phrase.replace(" ", "_")}.mp3'
             clip.export(clip_path, format='mp3')
             clip_paths.append(clip_path)
             
         return clip_paths
 
 def process_videos(video_ids: List[str], search_phrases: List[str], 
-                  output_dir: str = 'output') -> Dict[str, List[Dict]]:
+                  output_dir: str = 'output',
+                  lead_seconds: int = 1,
+                  trail_seconds: int = 2) -> Dict[str, List[Dict]]:
     """
     Main function to process multiple videos and find phrases
     
@@ -170,13 +175,15 @@ def process_videos(video_ids: List[str], search_phrases: List[str],
         video_ids: List of YouTube video IDs
         search_phrases: List of phrases to find
         output_dir: Directory to save output files
+        lead_seconds: Number of seconds to include before each match
+        trail_seconds: Number of seconds to include after each match
         
     Returns:
         Dictionary mapping video IDs to lists of matches with clip information
     """
     os.makedirs(output_dir, exist_ok=True)
     
-    extractor = PhraseExtractor(search_phrases)
+    extractor = PhraseExtractor(search_phrases, lead_seconds, trail_seconds)
     results = {}
     
     for video_id in video_ids:
@@ -218,7 +225,7 @@ def process_videos(video_ids: List[str], search_phrases: List[str],
 # Example usage:
 if __name__ == "__main__":
     video_ids = ["ZM5_6js19eM", "SsKT0s5J8ko"]
-    search_phrases = ["I could fly home", "I remember it all"]
+    search_phrases = ["I could fly home", "I remember it all", "letter from the government", "I dwell in my cell"]
     
     results = process_videos(video_ids, search_phrases)
     
