@@ -41,6 +41,39 @@ class LyricsSplitter:
             print(f"API Error: {e}")
             return False
 
+    def get_title_and_artist(self, phrase: str) -> Optional[Tuple[str, str]]:
+        """
+        Get the title and artist name for a given phrase from Genius
+        
+        Args:
+            phrase: The phrase to search for
+        
+        Returns:
+            A tuple of (title, artist) if found, otherwise None
+        """
+        search_url = f"{self.base_url}/search"
+        params = {'q': phrase}
+        
+        try:
+            response = requests.get(
+                search_url,
+                headers=self.headers,
+                params=params
+            )
+            response.raise_for_status()
+            
+            hits = response.json()['response']['hits']
+            for hit in hits:
+                if phrase.lower() in hit['result']['full_title'].lower():
+                    title = hit['result']['title']
+                    artist = hit['result']['primary_artist']['name']
+                    return title, artist
+            return None
+            
+        except Exception as e:
+            print(f"API Error: {e}")
+            return None
+
     def score_split(self, phrases: List[str]) -> float:
         """
         Score a potential split based on:
@@ -126,6 +159,15 @@ def example_usage():
         print(f"\nSplitting: {text}")
         score, phrases = splitter.split_lyrics(text)
         print(f"Best split: Score {score}: {' | '.join(phrases)}")
+        
+        # Get title and artist for each phrase
+        for phrase in phrases:
+            title_artist = splitter.get_title_and_artist(phrase)
+            if title_artist:
+                title, artist = title_artist
+                print(f"Phrase '{phrase}' found in '{title}' by {artist}")
+            else:
+                print(f"Phrase '{phrase}' not found in Genius database")
 
 if __name__ == "__main__":
     example_usage()
