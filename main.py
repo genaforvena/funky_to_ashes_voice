@@ -1,4 +1,5 @@
 import os
+import argparse
 from get_genius_lyrics import LyricsSplitter
 from get_captions import get_captions
 from get_clips import PhraseExtractor, process_videos
@@ -64,9 +65,11 @@ def combine_audio_clips(results: dict, output_path: str):
     combined_audio.export(output_path, format='mp3')
 
 if __name__ == "__main__":
-    # Example usage
-    input_text = "the future is now today"
+    parser = argparse.ArgumentParser(description='Combine quotes to audio.')
+    parser.add_argument('input_text', type=str, help='The input text containing song quotes.')
+    args = parser.parse_args()
+
     genius_token = os.getenv('GENIUS_TOKEN')
     youtube_api_key = os.getenv('YOUTUBE_API_KEY')
     
-    combine_quotes_to_audio(input_text, genius_token, youtube_api_key)
+    combine_quotes_to_audio(args.input_text, genius_token, youtube_api_key)
