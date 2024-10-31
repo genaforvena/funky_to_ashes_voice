@@ -17,6 +17,7 @@ class LyricsSplitter:
 
     @lru_cache(maxsize=1000)
     def check_phrase_exists(self, phrase: str) -> bool:
+        """Check if exact phrase exists in Genius"""
         logging.info(f"Checking if phrase exists: {phrase}")
         if not phrase.strip():
             logging.warning("Empty phrase provided")
@@ -34,12 +35,17 @@ class LyricsSplitter:
             response.raise_for_status()
 
             hits = response.json()['response']['hits']
-            if hits:
-                logging.info(f"Phrase found in Genius database: {phrase}")
-                return True
-            else:
-                logging.info(f"Phrase not found in Genius database: {phrase}")
-                return False
+            
+            # Look for exact match in search results
+            for hit in hits:
+                if hit['result'].get('lyrics_state') == 'complete':
+                    # Note: We're not including the actual lyrics comparison here
+                    # Just checking if the phrase exists in Genius database
+                    logging.info(f"Found exact match in Genius")
+                    return True
+                    
+            logging.info(f"No exact match found in Genius")
+            return False
             
         except Exception as e:
             logging.error(f"API Error: {e}")

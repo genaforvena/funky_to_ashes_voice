@@ -75,7 +75,7 @@ class PhraseExtractor:
 
     def find_matches(self, captions: List[Dict]) -> List[Tuple[str, float, str, float]]:
         """
-        Find sequential matches for parts of the input phrase, starting with the longest possible matches
+        Find matches for phrases from Genius in the captions
         """
         logging.info("Starting find_matches")
         merged_text, char_mappings = self.create_merged_text_and_mappings(captions)
@@ -84,74 +84,52 @@ class PhraseExtractor:
         # Split transcript into words
         transcript_words = merged_text.lower().split()
         logging.info(f"Transcript length: {len(transcript_words)} words")
-        SIMILARITY_THRESHOLD = 0.7
         
         for search_phrase in self.phrases:
-            remaining_words = search_phrase.lower().split()
-            current_pos = 0
-            phrase_matches = []
-            
-            logging.info(f"\nSearching for phrase: '{search_phrase}' ({len(remaining_words)} words)")
-            
-            while remaining_words and current_pos < len(transcript_words):
-                # Try to match the longest possible portion of remaining words
-                found_match = False
-                for length in range(len(remaining_words), 0, -1):
-                    current_phrase = " ".join(remaining_words[:length])
-                    logging.info(f"Trying to match: '{current_phrase}' ({length} words)")
-                    
-                    # Search through transcript from current position
-                    search_pos = current_pos
-                    while search_pos <= len(transcript_words) - length:
-                        window = " ".join(transcript_words[search_pos:search_pos + length])
-                        similarity = SequenceMatcher(None, current_phrase.lower(), window.lower()).ratio()
-                        
-                        if similarity >= SIMILARITY_THRESHOLD:
-                            logging.info(f"Found match with similarity {similarity:.2f}: '{window}'")
-                            
-                            # Calculate position and timestamps
-                            start_pos = len(' '.join(transcript_words[:search_pos]))
-                            if search_pos > 0:
-                                start_pos += 1
-                            end_pos = len(' '.join(transcript_words[:search_pos + length]))
-                            
-                            start_time = self.find_timestamp_for_position(start_pos, char_mappings)
-                            end_time = self.find_timestamp_for_position(end_pos, char_mappings)
-                            
-                            # Get context
-                            context_start = max(0, start_pos - 50)
-                            context_end = min(len(merged_text), end_pos + 50)
-                            context = merged_text[context_start:context_end]
-                            
-                            logging.info(f"Match found at time {start_time:.2f}s to {end_time:.2f}s")
-                            logging.info(f"Context: ...{context}...")
-                            
-                            phrase_matches.append((current_phrase, start_time, context, end_time))
-                            remaining_words = remaining_words[length:]  # Remove matched words
-                            current_pos = search_pos + length  # Continue search from after this match
-                            found_match = True
-                            break
-                        
-                        search_pos += 1
-                    
-                    if found_match:
-                        break
+            # Split the search phrase into smaller chunks
+            phrase_parts = search_phrase.lower().split(',')  # Split on commas
+            for part in phrase_parts:
+                # Further split into smaller meaningful chunks
+                sub_parts = part.strip().split(' ')
                 
-                if not found_match:
-                    logging.info(f"Could not find match for remaining words: '{' '.join(remaining_words)}'")
-                    break
-            
-            # If we found any matches for this phrase
-            if phrase_matches:
-                # Combine the sequential matches into one
-                combined_phrase = " / ".join(match[0] for match in phrase_matches)
-                start_time = phrase_matches[0][1]
-                end_time = phrase_matches[-1][3]
-                context = phrase_matches[-1][2]  # Use the context from the last match
-                matches.append((search_phrase, start_time, context, end_time))
-                logging.info(f"Combined matches into: '{combined_phrase}'")
+                # Look for chunks of 3-4 words that might match
+                for i in range(len(sub_parts)):
+                    for chunk_size in [4, 3, 2]:
+                        if i + chunk_size <= len(sub_parts):
+                            chunk = ' '.join(sub_parts[i:i+chunk_size])
+                            logging.info(f"Searching for chunk: '{chunk}'")
+                            
+                            # Look for this chunk in transcript
+                            current_pos = 0
+                            while current_pos <= len(transcript_words) - chunk_size:
+                                window = ' '.join(transcript_words[current_pos:current_pos + chunk_size])
+                                
+                                if window.lower() == chunk.lower():
+                                    logging.info(f"Found matching chunk: '{window}'")
+                                    
+                                    # Calculate exact positions
+                                    full_text_before = ' '.join(transcript_words[:current_pos])
+                                    start_pos = len(full_text_before)
+                                    if current_pos > 0:
+                                        start_pos += 1
+                                    end_pos = start_pos + len(window)
+                                    
+                                    # Get timestamps
+                                    start_time = self.find_timestamp_for_position(start_pos, char_mappings)
+                                    end_time = self.find_timestamp_for_position(end_pos, char_mappings)
+                                    
+                                    logging.info(f"Match found at time {start_time:.2f}s to {end_time:.2f}s")
+                                    logging.info(f"Original text: '{window}'")
+                                    
+                                    matches.append((chunk, start_time, window, end_time))
+                                    break  # Found a match for this chunk
+                                
+                                current_pos += 1
+                            
+                            if matches and matches[-1][0] == chunk:
+                                break  # Found a match, move to next part
         
-        logging.info(f"\nFound {len(matches)} total matches")
+        logging.info(f"\nFound {len(matches)} matches")
         return matches
 
     def download_audio(self, video_id: str, output_dir: str) -> str:
@@ -215,25 +193,82 @@ class PhraseExtractor:
 
     def save_clip(self, start_time: float, end_time: float, phrase: str) -> str:
         """
-        Save audio clip with a sanitized, shortened filename
+        Save audio clip with precise cut points
         """
-        # Create a safe, shortened filename
-        safe_phrase = phrase.replace('/', '_AND_')  # Replace phrase separator
-        # Take first 50 chars of phrase and remove/replace invalid characters
-        safe_phrase = re.sub(r'[^\w\s-]', '', safe_phrase[:50])
-        safe_phrase = re.sub(r'[-\s]+', '_', safe_phrase).strip('-_')
+        try:
+            # Convert seconds to milliseconds for pydub
+            start_ms = int(start_time * 1000)
+            end_ms = int(end_time * 1000)
+            
+            # Extract exactly the phrase duration
+            clip = self.audio[start_ms:end_ms]
+            
+            # Create filename from phrase
+            safe_phrase = "".join(x for x in phrase if x.isalnum() or x.isspace())
+            filename = f"clip_{safe_phrase[:30]}_{start_time:.2f}_{end_time:.2f}.mp3"
+            output_path = os.path.join(self.output_dir, filename)
+            
+            # Export with exact boundaries
+            clip.export(output_path, format="mp3")
+            logging.info(f"Saved clip: {filename} ({(end_time - start_time):.2f}s)")
+            
+            return output_path
+            
+        except Exception as e:
+            logging.error(f"Error saving clip: {e}")
+            return None
+
+    def process_videos(self, video_ids: List[str], phrases: List[str], output_dir: str) -> Dict:
+        """Process all downloaded videos and find matches in each"""
+        self.phrases = phrases
+        results = {}
         
-        # Format timestamp
-        timestamp = f"{int(start_time//60):02d}-{int(start_time%60):02d}"
+        for video_id in video_ids:
+            logging.info(f"\nProcessing video {video_id}")
+            try:
+                # Get captions for this video
+                captions = get_captions(video_id)
+                if not captions:
+                    logging.warning(f"No captions found for video {video_id}")
+                    continue
+                
+                # Download audio for this video
+                audio_path = self.download_audio(video_id, output_dir)
+                if not audio_path:
+                    logging.warning(f"Could not download audio for video {video_id}")
+                    continue
+                
+                self.audio = AudioSegment.from_file(audio_path)
+                
+                # Find matches in this video
+                matches = self.find_matches(captions)
+                if matches:
+                    # Save clips for each match
+                    video_results = []
+                    for phrase, start_time, context, end_time in matches:
+                        clip_path = self.save_clip(start_time, end_time, phrase)
+                        video_results.append({
+                            'phrase': phrase,
+                            'start_time': start_time,
+                            'end_time': end_time,
+                            'context': context,
+                            'clip_path': clip_path
+                        })
+                    results[video_id] = video_results
+                    logging.info(f"Found and saved {len(video_results)} clips from video {video_id}")
+                else:
+                    logging.info(f"No matches found in video {video_id}")
+                
+            except Exception as e:
+                logging.error(f"Error processing video {video_id}: {str(e)}")
+                continue
+                
+            finally:
+                # Clean up downloaded audio file
+                if audio_path and os.path.exists(audio_path):
+                    os.remove(audio_path)
         
-        # Create final filename
-        filename = f"output/clip_{timestamp}_{safe_phrase}.mp3"
-        
-        # Extract the clip
-        clip = self.audio[start_time * 1000:end_time * 1000]
-        clip.export(filename, format="mp3")
-        
-        return filename
+        return results
 
 def setup_logging():
     """Configure logging to avoid duplicates"""
