@@ -5,6 +5,7 @@ from youtube_transcript_api.formatters import TextFormatter
 from pytube import YouTube
 import logging
 import time
+from youtube_cache import YouTubeCache
 
 @dataclass
 class CaptionResult:
@@ -18,6 +19,7 @@ class EnhancedCaptionFetcher:
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.logger = self._setup_logger()
+        self.cache = YouTubeCache()
 
     def _setup_logger(self) -> logging.Logger:
         logger = logging.getLogger('CaptionFetcher')
@@ -142,21 +144,46 @@ class EnhancedCaptionFetcher:
         """
         self.logger.info(f"Fetching captions for video {video_id}")
 
+        # Check cache first
+        cached_result = self.cache.get_cached_data(video_id, 'captions')
+        if cached_result:
+            self.logger.info(f"Found cached captions for video {video_id}")
+            return CaptionResult(
+                video_id=video_id,
+                captions=cached_result.get('captions'),
+                source=cached_result.get('source', 'cache')
+            )
+
         # Try each method in sequence
         for attempt in range(self.max_retries):
             # 1. Try direct API access
             captions = self._try_direct_api(video_id)
             if captions:
+                # Cache successful result
+                self.cache.save_to_cache(video_id, 'captions', {
+                    'captions': captions,
+                    'source': 'api_direct'
+                })
                 return CaptionResult(video_id, captions, 'api_direct')
 
             # 2. Try manual language selection
             captions = self._try_manual_language_selection(video_id)
             if captions:
+                # Cache successful result
+                self.cache.save_to_cache(video_id, 'captions', {
+                    'captions': captions,
+                    'source': 'api_manual'
+                })
                 return CaptionResult(video_id, captions, 'api_manual')
 
             # 3. Try pytube fallback
             captions = self._try_pytube_fallback(video_id)
             if captions:
+                # Cache successful result
+                self.cache.save_to_cache(video_id, 'captions', {
+                    'captions': captions,
+                    'source': 'fallback'
+                })
                 return CaptionResult(video_id, captions, 'fallback')
 
             # If all methods failed, wait before retrying

@@ -169,6 +169,60 @@ def process_videos(video_ids: List[str], phrases: List[str], output_dir: str, yo
     processed_phrases = set()
     best_matches = {}
     
+    # First, check all cached captions for matches
+    cache = YouTubeCache()
+    all_cached_videos = cache.get_all_cached_data('captions')
+    
+    for cached_video_id, cached_data in all_cached_videos.items():
+        captions = cached_data.get('captions')
+        if not captions:
+            continue
+            
+        unmatched_phrases = [p for p in phrases if str(p) not in processed_phrases]
+        if not unmatched_phrases:
+            break
+            
+        matches, unmatched_phrases = extractor.find_matches(captions, unmatched_phrases)
+        if matches:
+            # If we found matches in cached captions, download audio and process
+            audio_path = download_audio(cached_video_id)
+            if audio_path:
+                # Process matches (existing clip extraction code)
+                for match in matches:
+                    phrase = match['phrase']
+                    similarity = match['similarity']
+                    
+                    try:
+                        # Generate unique clip filename
+                        safe_phrase = "".join(x for x in phrase if x.isalnum() or x.isspace())[:30]
+                        clip_path = os.path.join(output_dir, f"clip_{cached_video_id}_{safe_phrase}.mp3")
+                        
+                        # Extract and save clip
+                        audio = AudioSegment.from_file(audio_path)
+                        start_ms = int(match['start_time'] * 1000)
+                        end_ms = int(match['end_time'] * 1000)
+                        clip = audio[start_ms:end_ms]
+                        clip.export(clip_path, format="mp3")
+                        
+                        match['clip_path'] = clip_path
+                        logging.info(f"Successfully saved clip for '{phrase}' to {clip_path}")
+                        
+                        if phrase not in best_matches or similarity > best_matches[phrase]['similarity']:
+                            best_matches[phrase] = match
+                            processed_phrases.add(str(phrase))
+                            
+                    except Exception as e:
+                        logging.error(f"Error saving clip for '{phrase}': {str(e)}")
+                        continue
+                    
+                    # Clean up audio file
+                    if os.path.exists(audio_path):
+                        os.remove(audio_path)
+    
+    # Remove matched video IDs from the list if they were in cache
+    video_ids = [vid for vid in video_ids if vid not in all_cached_videos]
+    
+    # Continue with existing processing for remaining video IDs
     for video_id in video_ids:
         audio_path = None
         try:
@@ -186,7 +240,7 @@ def process_videos(video_ids: List[str], phrases: List[str], output_dir: str, yo
                 logging.info("All phrases have been matched. Stopping video processing.")
                 break
                 
-            matches = extractor.find_matches(captions, unmatched_phrases)
+            matches, unmatched_phrases = extractor.find_matches(captions, unmatched_phrases)
             
             if not matches:
                 logging.info(f"No matches found for phrases in video {video_id}")

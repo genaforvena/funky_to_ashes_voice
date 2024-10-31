@@ -7,6 +7,7 @@ class YouTubeCache:
     def __init__(self, cache_dir: str = 'cache'):
         self.cache_dir = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
+        self.cache_storage = {}
     
     def _hash_key(self, key: str) -> str:
         """Create a hash of the key to use as filename"""
@@ -26,4 +27,7 @@ class YouTubeCache:
     def save_to_cache(self, key: str, cache_type: str, data: Dict[str, Any]) -> None:
         cache_path = self._get_cache_path(key, cache_type)
         with open(cache_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2) 
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    
+    def get_all_cached_data(self, cache_type: str) -> Dict[str, Any]:
+        return {key: data for (key, type_), data in self.cache_storage.items() if type_ == cache_type}

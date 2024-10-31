@@ -134,75 +134,73 @@ class PhraseExtractor:
                 
         return char_mappings[-1][1]  # Return last timestamp if position is beyond end
 
-    def find_matches(self, captions: List[Dict], phrases: List[str]) -> List[Dict]:
+    def find_matches(self, captions: List[Dict], phrases: List[str]) -> Tuple[List[Dict], List[str]]:
         """Find matches for phrases in captions with looser matching criteria"""
         matches = []
         logging.info(f"Starting find_matches with {len(phrases)} phrases")
+        
+        # Create a single string from all captions and get char_mappings
+        full_caption_text, char_mappings = self.create_merged_text_and_mappings(captions)
         
         for phrase in phrases:
             phrase_lower = phrase.lower().strip()
             best_similarity = 0
             best_match = None
             
-            # Look for matches in each caption and combinations of captions
-            for i in range(len(captions)):
-                caption = captions[i]
-                caption_text = caption['text'].lower().strip()
-                start_time = float(caption['start'])
+            # Try to find the phrase in the full caption text
+            if phrase_lower in full_caption_text:
+                similarity = 1.0
+                start_index = full_caption_text.index(phrase_lower)
+                end_index = start_index + len(phrase_lower)
                 
-                # Try exact substring match first
-                if phrase_lower in caption_text:
-                    similarity = 1.0
-                else:
-                    # Use fuzzy matching with lower threshold
-                    similarity = SequenceMatcher(None, caption_text, phrase_lower).ratio()
+                # Find start and end times using character mappings
+                start_time = self.find_timestamp_for_position(start_index, char_mappings)
+                end_time = self.find_timestamp_for_position(end_index, char_mappings)
                 
-                if similarity >= 0.6 and similarity > best_similarity:
-                    logging.info(f"Found match for '{phrase}' with similarity {similarity:.2f}")
-                    
-                    # Calculate end time
-                    if i + 1 < len(captions):
-                        end_time = float(captions[i + 1]['start'])
-                    else:
-                        end_time = float(caption.get('end', start_time + 5))
-                    
-                    best_similarity = similarity
-                    best_match = {
-                        'phrase': phrase,
-                        'start_time': start_time,
-                        'end_time': end_time,
-                        'context': caption['text'],
-                        'similarity': similarity
-                    }
+                best_match = {
+                    'phrase': phrase,
+                    'start_time': start_time,
+                    'end_time': end_time,
+                    'context': full_caption_text[start_index:end_index],
+                    'similarity': similarity
+                }
+            else:
+                # Split the phrase into halves and then in half again if halves are bigger than 2
+                words = phrase_lower.split()
+                variations = []
                 
-                # Try combining with next captions (up to 3)
-                combined_text = caption_text
-                combined_start = start_time
+                def split_phrase(words):
+                    if len(words) > 2:
+                        mid = len(words) // 2
+                        return [(" ".join(words[:mid]), " ".join(words[mid:]))]
+                    return []
                 
-                for j in range(i + 1, min(i + 3, len(captions))):
-                    combined_text += " " + captions[j]['text'].lower().strip()
-                    
-                    if phrase_lower in combined_text:
-                        similarity = 1.0
-                    else:
-                        similarity = SequenceMatcher(None, combined_text, phrase_lower).ratio()
-                    
-                    if similarity >= 0.6 and similarity > best_similarity:
-                        logging.info(f"Found multi-caption match for '{phrase}' with similarity {similarity:.2f}")
-                        
-                        if j + 1 < len(captions):
-                            end_time = float(captions[j + 1]['start'])
-                        else:
-                            end_time = float(captions[j].get('end', float(captions[j]['start']) + 5))
-                        
-                        best_similarity = similarity
-                        best_match = {
-                            'phrase': phrase,
-                            'start_time': combined_start,
-                            'end_time': end_time,
-                            'context': combined_text,
-                            'similarity': similarity
-                        }
+                variations.extend(split_phrase(words))
+                for first_half, second_half in variations:
+                    variations.extend(split_phrase(first_half.split()))
+                    variations.extend(split_phrase(second_half.split()))
+                
+                for variation in variations:
+                    for sub_phrase in variation:
+                        if sub_phrase in full_caption_text:
+                            similarity = 1.0
+                            start_index = full_caption_text.index(sub_phrase)
+                            end_index = start_index + len(sub_phrase)
+                            
+                            # Find start and end times using character mappings
+                            start_time = self.find_timestamp_for_position(start_index, char_mappings)
+                            end_time = self.find_timestamp_for_position(end_index, char_mappings)
+                            
+                            best_match = {
+                                'phrase': phrase,
+                                'start_time': start_time,
+                                'end_time': end_time,
+                                'context': full_caption_text[start_index:end_index],
+                                'similarity': similarity
+                            }
+                            break
+                    if best_match:
+                        break
             
             if best_match:
                 matches.append(best_match)
@@ -211,7 +209,7 @@ class PhraseExtractor:
                 logging.info(f"No match found for phrase: '{phrase}'")
         
         logging.info(f"Found total {len(matches)} matches")
-        return matches
+        return matches, phrases
 
     def extract_clips(self, audio_path: str, matches: List[Dict], output_dir: str) -> List[str]:
         """
@@ -295,7 +293,7 @@ class PhraseExtractor:
                 self.audio = AudioSegment.from_file(audio_path)
                 
                 # Find matches in this video
-                matches = self.find_matches(captions, self.phrases)
+                matches, self.phrases = self.find_matches(captions, self.phrases)
                 if matches:
                     # Save clips for each match
                     video_results = []
@@ -402,7 +400,7 @@ def process_videos(video_ids: List[str], phrases: List[str], output_dir: str, yo
             
             # Only search for phrases we haven't found yet
             unmatched_phrases = [p for p in phrases if str(p) not in processed_phrases]
-            matches = extractor.find_matches(captions, unmatched_phrases)
+            matches, unmatched_phrases = extractor.find_matches(captions, unmatched_phrases)
             
             if not matches:
                 logging.info(f"No matches found for phrases in video {video_id}")
