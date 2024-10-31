@@ -135,75 +135,80 @@ class PhraseExtractor:
         return char_mappings[-1][1]  # Return last timestamp if position is beyond end
 
     def find_matches(self, captions: List[Dict], phrases: List[str]) -> List[Dict]:
-        """Find matches for phrases in captions"""
+        """Find matches for phrases in captions with looser matching criteria"""
         matches = []
         logging.info(f"Starting find_matches with {len(phrases)} phrases")
         
         for phrase in phrases:
-            phrase_lower = phrase.lower()
+            phrase_lower = phrase.lower().strip()
+            phrase_words = phrase_lower.split()
             best_similarity = 0
             best_match = None
             
-            # Look for exact matches in each caption
-            for i, caption in enumerate(captions):
-                caption_text = caption['text'].lower()
-                similarity = SequenceMatcher(None, caption_text, phrase_lower).ratio()
+            # Look for matches in each caption and combinations of captions
+            for i in range(len(captions)):
+                # Try single caption
+                caption = captions[i]
+                caption_text = caption['text'].lower().strip()
+                current_start_time = float(caption['start'])  # Define start time here
                 
-                if similarity >= 0.8 and similarity > best_similarity:
+                # Try exact substring match first
+                if phrase_lower in caption_text:
+                    similarity = 1.0
+                else:
+                    # Use fuzzy matching with lower threshold
+                    similarity = SequenceMatcher(None, caption_text, phrase_lower).ratio()
+                
+                if similarity >= 0.6 and similarity > best_similarity:
                     logging.info(f"Found match for '{phrase}' with similarity {similarity:.2f}")
                     
-                    start_time = float(caption['start'])
-                    
-                    # Find the next caption for end time
                     if i + 1 < len(captions):
                         end_time = float(captions[i + 1]['start'])
                     else:
-                        end_time = float(caption.get('end', start_time + 5))
+                        end_time = float(caption.get('end', current_start_time + 5))
                     
                     best_similarity = similarity
                     best_match = {
                         'phrase': phrase,
-                        'start_time': start_time,
+                        'start_time': current_start_time,
                         'end_time': end_time,
                         'context': caption['text'],
                         'similarity': similarity
                     }
-            
-            # If no exact match found, try finding the phrase across consecutive captions
-            if not best_match:
-                for i in range(len(captions)):
-                    combined_text = ""
-                    start_idx = i
+                
+                # Try combining with next captions (up to 3)
+                combined_text = caption_text
+                
+                for j in range(i + 1, min(i + 3, len(captions))):
+                    combined_text += " " + captions[j]['text'].lower().strip()
                     
-                    # Try combining up to 3 consecutive captions
-                    for j in range(i, min(i + 3, len(captions))):
-                        combined_text += " " + captions[j]['text'].lower()
-                        combined_text = combined_text.strip()
-                        
+                    if phrase_lower in combined_text:
+                        similarity = 1.0
+                    else:
                         similarity = SequenceMatcher(None, combined_text, phrase_lower).ratio()
-                        if similarity >= 0.8 and similarity > best_similarity:
-                            logging.info(f"Found multi-caption match for '{phrase}' with similarity {similarity:.2f}")
-                            
-                            start_time = float(captions[start_idx]['start'])
-                            
-                            # End time is start of the next caption after the match
-                            if j + 1 < len(captions):
-                                end_time = float(captions[j + 1]['start'])
-                            else:
-                                end_time = float(captions[j].get('end', start_time + 5))
-                            
-                            best_similarity = similarity
-                            best_match = {
-                                'phrase': phrase,
-                                'start_time': start_time,
-                                'end_time': end_time,
-                                'context': combined_text,
-                                'similarity': similarity
-                            }
+                    
+                    if similarity >= 0.6 and similarity > best_similarity:
+                        logging.info(f"Found multi-caption match for '{phrase}' with similarity {similarity:.2f}")
+                        
+                        if j + 1 < len(captions):
+                            end_time = float(captions[j + 1]['start'])
+                        else:
+                            end_time = float(captions[j].get('end', current_start_time + 5))
+                        
+                        best_similarity = similarity
+                        best_match = {
+                            'phrase': phrase,
+                            'start_time': current_start_time,
+                            'end_time': end_time,
+                            'context': combined_text,
+                            'similarity': similarity
+                        }
             
             if best_match:
                 matches.append(best_match)
                 logging.info(f"Added match for phrase: '{phrase}' ({best_match['similarity']:.2f})")
+            else:
+                logging.info(f"No match found for phrase: '{phrase}'")
         
         logging.info(f"Found total {len(matches)} matches")
         return matches
