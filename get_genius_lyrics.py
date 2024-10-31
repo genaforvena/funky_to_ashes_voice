@@ -3,6 +3,7 @@ from functools import lru_cache
 from typing import Tuple, List, Optional
 import os
 import logging
+from genius_cache import GeniusCache
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -10,6 +11,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class LyricsSplitter:
     def __init__(self, token: str):
         self.genius_api = GeniusAPI(token)
+        self.genius_cache = GeniusCache()
         self.max_words = 6  # Initial maximum words per phrase
         logging.info("Initialized LyricsSplitter with provided Genius token")
     
@@ -76,36 +78,35 @@ class LyricsSplitter:
         logging.info(f"No match found for phrase after {max_retries} retries: {phrase}")
         return None
     
-    def get_title_and_artist(self, phrase: str) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Retrieve the title and artist for a given phrase from Genius
-        """
-        logging.info(f"Retrieving title and artist for phrase: {phrase}")
-        search_url = f"{self.genius_api.base_url}/search"
-        params = {'q': phrase}
+    def get_title_and_artist(self, phrase: str) -> Optional[Tuple[str, str]]:
+        """Get the song title and artist for a given phrase using Genius API with caching"""
+        # Check cache first
+        cached_result = self.genius_cache.get_cached_data(phrase, 'title_artist')
+        if cached_result:
+            return cached_result.get('title'), cached_result.get('artist')
         
         try:
-            response = requests.get(search_url, headers=self.genius_api.headers, params=params)
-            response.raise_for_status()
-            hits = response.json().get('response', {}).get('hits', [])
+            # Search Genius for the phrase
+            result = self.genius_api.get_title_and_artist(phrase)
             
-            for hit in hits:
-                # Check if the hit is a complete song
-                if hit['result'].get('lyrics_state') == 'complete':
-                    title = hit['result']['title']
-                    artist = hit['result']['primary_artist']['name']
-                    logging.info(f"Found title: {title}, artist: {artist} for phrase: {phrase}")
-                    return title, artist
-            
-            logging.info(f"No title and artist found for phrase: {phrase}")
-            return None, None
-        
-        except requests.exceptions.RequestException as e:
-            logging.error(f"API Request Error: {e}")
-            return None, None
+            if result and result[0]:
+                title = result[0]
+                artist = result[1]
+                
+                # Save to cache
+                self.genius_cache.save_to_cache(
+                    phrase, 
+                    'title_artist',
+                    {'title': title, 'artist': artist}
+                )
+                
+                logging.info(f"Found title: {title}, artist: {artist} for phrase: {phrase}")
+                return title, artist
+                
         except Exception as e:
-            logging.error(f"Unexpected Error: {e}")
-            return None, None
+            logging.error(f"Error searching Genius for phrase '{phrase}': {str(e)}")
+        
+        return None
 
 class GeniusAPI:
     def __init__(self, token: str):

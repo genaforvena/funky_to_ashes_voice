@@ -4,7 +4,7 @@ from get_genius_lyrics import LyricsSplitter
 from get_captions import get_captions
 from get_clips import PhraseExtractor, process_videos
 from googleapiclient.discovery import build
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import logging
 from youtube_verification import verify_youtube_video
 from pydub import AudioSegment
@@ -133,9 +133,13 @@ def combine_audio_clips(results, output_path):
     combined_audio.export(output_path, format='mp3')
     logging.info(f"Combined audio exported to {output_path}")
 
-def process_videos(video_ids, phrases, output_dir, youtube_api_key):
-    # Create temp directory
+def process_videos(video_ids: List[str], phrases: List[str], output_dir: str, youtube_api_key: str) -> List[Dict]:
+    # Create both temp and output directories
     os.makedirs('temp', exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Initialize the extractor with phrases
+    extractor = PhraseExtractor(phrases)
     
     # Initialize tracking variables
     processed_phrases = set()
@@ -145,7 +149,6 @@ def process_videos(video_ids, phrases, output_dir, youtube_api_key):
     for video_id in video_ids:
         try:
             logging.info(f"Processing video {video_id}")
-            audio_path = None
             
             # Get captions and check if they exist
             captions = get_captions(video_id)
@@ -153,7 +156,7 @@ def process_videos(video_ids, phrases, output_dir, youtube_api_key):
                 logging.warning(f"No captions found for video {video_id}. Skipping...")
                 continue
                 
-            # Find matches only for unmatched phrases
+            # Find matches using the initialized extractor
             unmatched_phrases = [p for p in phrases if str(p) not in processed_phrases]
             matches = extractor.find_matches(captions, unmatched_phrases)
             
@@ -169,26 +172,6 @@ def process_videos(video_ids, phrases, output_dir, youtube_api_key):
             
             # Extract clips for each match
             clip_paths = extractor.extract_clips(audio_path, matches, output_dir)
-            
-            # Update best matches and processed phrases
-            for match, clip_path in zip(matches, clip_paths):
-                phrase = match['phrase']
-                similarity = match['similarity']
-                
-                if (phrase not in best_matches or 
-                    similarity > best_matches[phrase]['similarity']):
-                    match['clip_path'] = clip_path
-                    best_matches[phrase] = match
-                    processed_phrases.add(str(phrase))
-                    logging.info(f"Found match for '{phrase}' with similarity {similarity:.2f}")
-                else:
-                    # Clean up unused clip
-                    if os.path.exists(clip_path):
-                        os.remove(clip_path)
-                
-            # When creating clip path, use temp directory
-            clip_filename = f"clip_{timestamp}_{phrase}.mp3".replace(" ", "_")
-            clip_path = os.path.join('temp', clip_filename)
             
             # Update best matches and processed phrases
             for match, clip_path in zip(matches, clip_paths):

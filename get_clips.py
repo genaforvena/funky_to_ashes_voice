@@ -54,9 +54,9 @@ class PhraseFinder:
             # Extract exactly the phrase duration
             clip = self.audio[start_ms:end_ms]
             
-            # Create filename from phrase
+            # Create filename using start_time instead of undefined timestamp
             safe_phrase = "".join(x for x in phrase if x.isalnum() or x.isspace())
-            filename = f"clip_{safe_phrase[:30]}_{start_time:.2f}_{end_time:.2f}.mp3"
+            filename = f"clip_{start_time:.2f}_{safe_phrase[:30]}.mp3"
             output_path = os.path.join(self.output_dir, filename)
             
             # Export with exact boundaries
@@ -370,6 +370,10 @@ def download_audio(video_id: str, output_dir: str = 'temp') -> str:
 
 def process_videos(video_ids: List[str], phrases: List[str], output_dir: str, youtube_api_key: str) -> List[Dict]:
     """Process videos to find and extract matching phrases"""
+    # Create directories
+    os.makedirs('temp', exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+    
     extractor = PhraseExtractor(phrases)
     best_matches = {}
     processed_phrases = set()
@@ -399,8 +403,10 @@ def process_videos(video_ids: List[str], phrases: List[str], output_dir: str, yo
                 logging.warning(f"Failed to download audio for video {video_id}")
                 continue
             
+            # Use the extract_clips method from PhraseExtractor
             clip_paths = extractor.extract_clips(audio_path, matches, output_dir)
             
+            # Update matches with clip paths
             for match, clip_path in zip(matches, clip_paths):
                 phrase = match['phrase']
                 similarity = match['similarity']
@@ -411,6 +417,7 @@ def process_videos(video_ids: List[str], phrases: List[str], output_dir: str, yo
                     processed_phrases.add(str(phrase))
                     logging.info(f"Found match for '{phrase}' with similarity {similarity:.2f}")
                 else:
+                    # Clean up unused clip
                     if os.path.exists(clip_path):
                         os.remove(clip_path)
                 

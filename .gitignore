@@ -8,6 +8,7 @@ __pycache__/
 word_samples/
 output/
 temp/
+cache/
 
 # C extensions
 *.so
