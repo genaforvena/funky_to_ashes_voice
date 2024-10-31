@@ -61,7 +61,7 @@ def combine_quotes_to_audio(input_text: str, genius_token: str, youtube_api_key:
     # Initialize the LyricsSplitter with the Genius API token
     splitter = LyricsSplitter(genius_token)
     remaining_text = input_text
-    all_results = []
+    all_results = []  # Store all results across iterations
     
     # Iteratively process the text with smaller and smaller chunks
     while remaining_text:
@@ -86,52 +86,70 @@ def combine_quotes_to_audio(input_text: str, genius_token: str, youtube_api_key:
         # Process videos and get matches
         results = process_videos(video_ids, phrases, output_dir, youtube_api_key)
         
-        # Update remaining text by removing matched phrases
-        matched_phrases = {result['phrase'] for result in results}
-        remaining_phrases = []
-        
-        for phrase in phrases:
-            if str(phrase) not in matched_phrases:
-                remaining_phrases.append(str(phrase))
-        
-        # If we found matches, remove them from remaining_text and continue
-        if matched_phrases:
+        # Add new results to all_results
+        if results:
             all_results.extend(results)
+            
+            # Update remaining text by removing matched phrases
+            matched_phrases = {result['phrase'] for result in results}
+            remaining_phrases = [str(phrase) for phrase in phrases if str(phrase) not in matched_phrases]
             remaining_text = ' '.join(remaining_phrases)
+            
             if remaining_text:
                 print(f"Remaining text to process: {remaining_text}")
         else:
             # If no matches found, try with smaller chunks
             if len(phrases) > 1:
-                # Reduce chunk size for next iteration
                 splitter.reduce_chunk_size()
                 print("No matches found, reducing chunk size and retrying...")
             else:
-                # If we're already at single words and still no match, skip this word
                 print(f"Warning: Could not find match for: {remaining_text}")
                 break
+    
+    # Sort results by their original order in the input text
+    all_results.sort(key=lambda x: input_text.find(x['phrase']))
     
     # Combine all matched clips into final audio
     combined_audio_path = os.path.join(output_dir, 'combined_audio.mp3')
     combine_audio_clips(all_results, combined_audio_path)
     
     print(f"Combined audio saved to: {combined_audio_path}")
+    return all_results  # Return all results for potential further processing
 
 def combine_audio_clips(results, output_path):
-    combined_audio = AudioSegment.empty()
+    """Combine audio clips in the order they appear in results"""
+    clips = []  # Store individual clips
     
     for result in results:
         clip_path = result.get('clip_path')
         if clip_path and os.path.exists(clip_path):
-            audio_clip = AudioSegment.from_file(clip_path)
-            combined_audio += audio_clip
+            try:
+                audio_clip = AudioSegment.from_file(clip_path)
+                clips.append(audio_clip)
+                logging.info(f"Added clip for phrase: '{result['phrase']}'")
+            except Exception as e:
+                logging.error(f"Error adding clip {clip_path}: {str(e)}")
+        else:
+            logging.warning(f"Missing clip file for phrase: '{result['phrase']}'")
     
-    if len(combined_audio) == 0:
+    if not clips:
         logging.error("No audio clips to combine.")
         return
     
-    combined_audio.export(output_path, format='mp3')
-    logging.info(f"Combined audio exported to {output_path}")
+    # Add a small silence between clips
+    silence = AudioSegment.silent(duration=100)  # 100ms silence
+    
+    # Combine all clips with silence between them
+    final_audio = clips[0]
+    for clip in clips[1:]:
+        final_audio += silence + clip
+    
+    # Export the final audio
+    try:
+        final_audio.export(output_path, format='mp3')
+        logging.info(f"Combined audio exported to {output_path}")
+    except Exception as e:
+        logging.error(f"Error exporting combined audio: {str(e)}")
 
 def process_videos(video_ids: List[str], phrases: List[str], output_dir: str, youtube_api_key: str) -> List[Dict]:
     # Create both temp and output directories
@@ -175,24 +193,33 @@ def process_videos(video_ids: List[str], phrases: List[str], output_dir: str, yo
                 continue
             
             # Extract clips for each match
-            clip_paths = extractor.extract_clips(audio_path, matches, output_dir)
-            
-            # Update best matches and processed phrases
-            for match, clip_path in zip(matches, clip_paths):
+            for match in matches:
                 phrase = match['phrase']
                 similarity = match['similarity']
                 
-                if (phrase not in best_matches or 
-                    similarity > best_matches[phrase]['similarity']):
+                try:
+                    # Generate unique clip filename
+                    safe_phrase = "".join(x for x in phrase if x.isalnum() or x.isspace())[:30]
+                    clip_path = os.path.join(output_dir, f"clip_{video_id}_{safe_phrase}.mp3")
+                    
+                    # Extract and save clip
+                    audio = AudioSegment.from_file(audio_path)
+                    start_ms = int(match['start_time'] * 1000)
+                    end_ms = int(match['end_time'] * 1000)
+                    clip = audio[start_ms:end_ms]
+                    clip.export(clip_path, format="mp3")
+                    
                     match['clip_path'] = clip_path
-                    best_matches[phrase] = match
-                    processed_phrases.add(str(phrase))
-                    logging.info(f"Found match for '{phrase}' with similarity {similarity:.2f}")
-                else:
-                    # Clean up unused clip
-                    if os.path.exists(clip_path):
-                        os.remove(clip_path)
-                
+                    logging.info(f"Successfully saved clip for '{phrase}' to {clip_path}")
+                    
+                    if phrase not in best_matches or similarity > best_matches[phrase]['similarity']:
+                        best_matches[phrase] = match
+                        processed_phrases.add(str(phrase))
+                        
+                except Exception as e:
+                    logging.error(f"Error saving clip for '{phrase}': {str(e)}")
+                    continue
+            
         except Exception as e:
             logging.error(f"Error processing video {video_id}: {str(e)}")
             continue

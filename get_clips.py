@@ -342,11 +342,12 @@ def download_audio(video_id: str, output_dir: str = 'temp') -> str:
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, f"{video_id}.mp3")
         
-        # Check if file already exists
-        if os.path.exists(output_path + '.mp3'):
+        # Check if file already exists AND is valid
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
             logging.info(f"Using cached audio for video {video_id}")
             return output_path
             
+        logging.info(f"Downloading audio for video {video_id}")
         output_template = os.path.join(output_dir, f"{video_id}.%(ext)s")
         
         ydl_opts = {
@@ -361,76 +362,77 @@ def download_audio(video_id: str, output_dir: str = 'temp') -> str:
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Extract video info first to check duration
-            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
-            duration = info.get('duration', 0)  # Duration in seconds
-            
-            if duration > 600:  # 10 minutes = 600 seconds
-                logging.warning(f"Video {video_id} is too long ({duration/60:.1f} minutes). Skipping...")
+            # Download and verify file exists
+            ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                logging.info(f"Successfully downloaded audio for video {video_id}")
+                return output_path
+            else:
+                logging.error(f"Failed to download audio for video {video_id}")
                 return None
                 
-            # If duration is acceptable, proceed with download
-            ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
-        
-        if os.path.exists(output_path):
-            logging.info(f"Successfully downloaded audio for video {video_id}")
-            return output_path
-        else:
-            logging.error(f"Output file not found at {output_path}")
-            return None
-            
     except Exception as e:
         logging.error(f"Error downloading audio for video {video_id}: {str(e)}")
+        if os.path.exists(output_path):
+            os.remove(output_path)  # Clean up partial download
         return None
 
 def process_videos(video_ids: List[str], phrases: List[str], output_dir: str, youtube_api_key: str) -> List[Dict]:
     """Process videos to find and extract matching phrases"""
-    # Create directories
     os.makedirs('temp', exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
     
     extractor = PhraseExtractor(phrases)
     best_matches = {}
     processed_phrases = set()
-    downloaded_audio_files = set()  # Track downloaded files
     
-    try:
-        for video_id in video_ids:
-            audio_path = None
-            try:
-                if len(processed_phrases) == len(phrases):
-                    break
+    for video_id in video_ids:
+        audio_path = None
+        try:
+            if len(processed_phrases) == len(phrases):
+                break
+                
+            logging.info(f"Processing video {video_id}")
+            
+            # Get captions for this video
+            captions = get_captions(video_id)
+            if not captions:
+                logging.warning(f"No captions found for video {video_id}. Skipping...")
+                continue
+            
+            # Only search for phrases we haven't found yet
+            unmatched_phrases = [p for p in phrases if str(p) not in processed_phrases]
+            matches = extractor.find_matches(captions, unmatched_phrases)
+            
+            if not matches:
+                logging.info(f"No matches found for phrases in video {video_id}")
+                continue
+            
+            # Download audio only if we found matches
+            audio_path = download_audio(video_id, 'temp')
+            if not audio_path:
+                logging.warning(f"Failed to download audio for video {video_id}")
+                continue
+                
+            # Process each match
+            for match in matches:
+                phrase = match['phrase']
+                similarity = match['similarity']
+                
+                # Extract the clip
+                try:
+                    audio = AudioSegment.from_file(audio_path)
+                    start_ms = int(match['start_time'] * 1000)
+                    end_ms = int(match['end_time'] * 1000)
+                    clip = audio[start_ms:end_ms]
                     
-                logging.info(f"Processing video {video_id}")
-                
-                captions = get_captions(video_id)
-                if captions is None:
-                    logging.warning(f"No captions found for video {video_id}. Skipping...")
-                    continue
-                
-                # Only search for phrases we haven't found yet
-                unmatched_phrases = [p for p in phrases if str(p) not in processed_phrases]
-                matches = extractor.find_matches(captions, unmatched_phrases)
-                
-                if not matches:
-                    logging.info(f"No matches found for phrases in video {video_id}")
-                    continue
-                
-                # Download audio only if we found matches
-                audio_path = download_audio(video_id)
-                if not audio_path:
-                    logging.warning(f"Failed to download audio for video {video_id}")
-                    continue
+                    # Generate clip filename
+                    safe_phrase = "".join(x for x in phrase if x.isalnum() or x.isspace())
+                    clip_path = os.path.join(output_dir, f"clip_{video_id}_{safe_phrase[:30]}.mp3")
                     
-                downloaded_audio_files.add(audio_path)
-                
-                # Extract clips for this video's matches
-                clip_paths = extractor.extract_clips(audio_path, matches, output_dir)
-                
-                # Update matches with clip paths
-                for match, clip_path in zip(matches, clip_paths):
-                    phrase = match['phrase']
-                    similarity = match['similarity']
+                    # Export clip
+                    clip.export(clip_path, format="mp3")
+                    match['clip_path'] = clip_path
                     
                     if (phrase not in best_matches or 
                         similarity > best_matches[phrase]['similarity']):
@@ -440,27 +442,26 @@ def process_videos(video_ids: List[str], phrases: List[str], output_dir: str, yo
                             if old_clip and os.path.exists(old_clip):
                                 os.remove(old_clip)
                         
-                        match['clip_path'] = clip_path
                         match['video_id'] = video_id
                         best_matches[phrase] = match
                         processed_phrases.add(str(phrase))
-                        logging.info(f"Found match for '{phrase}' with similarity {similarity:.2f} in video {video_id}")
-                    else:
-                        if os.path.exists(clip_path):
-                            os.remove(clip_path)
+                        logging.info(f"Saved clip for '{phrase}' with similarity {similarity:.2f} from video {video_id}")
                     
-            except Exception as e:
-                logging.error(f"Error processing video {video_id}: {str(e)}")
-                continue
-                
-    finally:
-        # Clean up all downloaded audio files at the end
-        for audio_path in downloaded_audio_files:
-            try:
-                if os.path.exists(audio_path):
+                except Exception as e:
+                    logging.error(f"Error saving clip for phrase '{phrase}' from video {video_id}: {str(e)}")
+                    continue
+                    
+        except Exception as e:
+            logging.error(f"Error processing video {video_id}: {str(e)}")
+            continue
+            
+        finally:
+            # Clean up downloaded audio file
+            if audio_path and os.path.exists(audio_path):
+                try:
                     os.remove(audio_path)
-            except Exception as e:
-                logging.error(f"Error removing audio file {audio_path}: {str(e)}")
+                except Exception as e:
+                    logging.error(f"Error removing audio file {audio_path}: {str(e)}")
     
     results = list(best_matches.values())
     logging.info(f"Found best matches for {len(results)} phrases")
