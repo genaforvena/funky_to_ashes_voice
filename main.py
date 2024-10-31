@@ -145,8 +145,8 @@ def process_videos(video_ids: List[str], phrases: List[str], output_dir: str, yo
     processed_phrases = set()
     best_matches = {}
     
-    results = []
     for video_id in video_ids:
+        audio_path = None
         try:
             logging.info(f"Processing video {video_id}")
             
@@ -158,6 +158,10 @@ def process_videos(video_ids: List[str], phrases: List[str], output_dir: str, yo
                 
             # Find matches using the initialized extractor
             unmatched_phrases = [p for p in phrases if str(p) not in processed_phrases]
+            if not unmatched_phrases:
+                logging.info("All phrases have been matched. Stopping video processing.")
+                break
+                
             matches = extractor.find_matches(captions, unmatched_phrases)
             
             if not matches:
