@@ -96,7 +96,7 @@ def combine_audio_clips(results, output_path):
 
 def process_videos(video_ids, phrases, output_dir, youtube_api_key):
     extractor = PhraseExtractor(phrases)
-    results = []
+    best_matches = {}  # Dictionary to store best match for each phrase
     
     for video_id in video_ids:
         try:
@@ -122,15 +122,33 @@ def process_videos(video_ids, phrases, output_dir, youtube_api_key):
             # Extract clips for each match
             clip_paths = extractor.extract_clips(audio_path, matches, output_dir)
             
-            # Add clip paths to matches
+            # Update best matches if current match is better
             for match, clip_path in zip(matches, clip_paths):
-                match['clip_path'] = clip_path
-                results.append(match)
+                phrase = match['phrase']
+                similarity = match['similarity']
+                
+                if (phrase not in best_matches or 
+                    similarity > best_matches[phrase]['similarity']):
+                    match['clip_path'] = clip_path
+                    best_matches[phrase] = match
+                    logging.info(f"Found better match for '{phrase}' with similarity {similarity:.2f}")
+                else:
+                    # Clean up unused clip
+                    if os.path.exists(clip_path):
+                        os.remove(clip_path)
                 
         except Exception as e:
             logging.error(f"Error processing video {video_id}: {str(e)}")
             continue
+        
+        finally:
+            # Clean up downloaded audio file
+            if audio_path and os.path.exists(audio_path):
+                os.remove(audio_path)
     
+    # Convert dictionary to list of best matches
+    results = list(best_matches.values())
+    logging.info(f"Found best matches for {len(results)} phrases")
     return results
 
 def get_expected_track_info(phrases):
