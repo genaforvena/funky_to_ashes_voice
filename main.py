@@ -57,7 +57,7 @@ def combine_quotes_to_audio(input_text: str, genius_token: str, youtube_api_key:
     video_ids = search_youtube_video_ids(titles_and_artists, youtube_api_key)
     
     # Process each video to find and extract clips
-    results = process_videos(video_ids, phrases, output_dir, youtube_api_key=youtube_api_key)
+    results = process_videos(video_ids, phrases, output_dir)
     
     # Combine the clips into a single audio file with a "chopped and screwed" aesthetic
     combined_audio_path = os.path.join(output_dir, 'combined_audio.mp3')
@@ -85,5 +85,7 @@ if __name__ == "__main__":
 
     genius_token = os.getenv('GENIUS_TOKEN')
     youtube_api_key = os.getenv('YOUTUBE_API_KEY')
+    print(genius_token)
+    print(youtube_api_key)
     
     combine_quotes_to_audio(args.input_text, genius_token, youtube_api_key)
