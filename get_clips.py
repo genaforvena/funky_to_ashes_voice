@@ -408,6 +408,14 @@ def process_videos(video_ids: List[str], phrases: List[str], output_dir: str, yo
                 logging.info(f"No matches found for phrases in video {video_id}")
                 continue
             
+            # Check video duration using last caption timestamp
+            if captions:
+                last_caption = captions[-1]
+                video_duration = float(last_caption.get('start', 0))
+                if video_duration > 600:  # 600 seconds = 10 minutes
+                    logging.warning(f"Video {video_id} is longer than 10 minutes. Skipping...")
+                    continue
+            
             # Download audio only if we found matches
             audio_path = download_audio(video_id, 'temp')
             if not audio_path:
