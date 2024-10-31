@@ -96,26 +96,40 @@ def combine_audio_clips(results, output_path):
 
 def process_videos(video_ids, phrases, output_dir, youtube_api_key):
     extractor = PhraseExtractor(phrases)
-    results = {}
+    results = []
     
     for video_id in video_ids:
-        logging.info(f"Processing video {video_id}")
-        
-        captions = get_captions(video_id)
-        if not captions:
-            logging.warning(f"No captions found for video {video_id}. Skipping this video.")
+        try:
+            logging.info(f"Processing video {video_id}")
+            
+            # Get captions and check if they exist
+            captions = get_captions(video_id)
+            if captions is None:
+                logging.warning(f"No captions found for video {video_id}. Skipping...")
+                continue
+            
+            logging.info(f"Captions retrieved for video {video_id}: {len(captions)} words")
+            
+            # Download audio for this video
+            audio_path = extractor.download_audio(video_id, output_dir)
+            
+            # Find matches in captions
+            matches = extractor.find_matches(captions, phrases)
+            if not matches:
+                logging.info(f"No matches found for phrases in video {video_id}")
+                continue
+            
+            # Extract clips for each match
+            clip_paths = extractor.extract_clips(audio_path, matches, output_dir)
+            
+            # Add clip paths to matches
+            for match, clip_path in zip(matches, clip_paths):
+                match['clip_path'] = clip_path
+                results.append(match)
+                
+        except Exception as e:
+            logging.error(f"Error processing video {video_id}: {str(e)}")
             continue
-        
-        logging.info(f"Captions retrieved for video {video_id}: {len(captions)} words")
-        
-        matches = extractor.find_matches(captions, phrases)
-        if not matches:
-            logging.info(f"No matches found for phrases in video {video_id}")
-            continue
-        
-        # Process matches if found
-        # Your logic to handle matches
-        results[video_id] = matches
     
     return results
 
