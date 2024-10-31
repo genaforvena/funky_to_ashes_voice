@@ -136,7 +136,7 @@ class PhraseExtractor:
 
     def find_matches(self, captions: List[Dict], phrases: List[str]) -> List[Dict]:
         """Find matches for phrases in captions using incremental matching"""
-        matches = []
+        best_matches = {}  # Dictionary to store best match for each phrase
         merged_text, char_mappings = self.create_merged_text_and_mappings(captions)
         merged_text = merged_text.lower()
         
@@ -145,6 +145,8 @@ class PhraseExtractor:
         for phrase in phrases:
             words = phrase.lower().split()
             start = 0
+            best_similarity = 0
+            best_match = None
             
             while start < len(words):
                 current_phrase = ""
@@ -161,8 +163,8 @@ class PhraseExtractor:
                         window = " ".join(transcript_words[i:i + (end - start + 1)])
                         similarity = SequenceMatcher(None, window, current_phrase).ratio()
                         
-                        if similarity >= 0.8:  # Threshold for match
-                            logging.info(f"Found match with similarity {similarity:.2f}")
+                        if similarity >= 0.8 and similarity > best_similarity:  # Keep track of best match
+                            logging.info(f"Found better match with similarity {similarity:.2f}")
                             
                             # Calculate positions and timestamps
                             start_pos = merged_text.find(window)
@@ -170,21 +172,23 @@ class PhraseExtractor:
                             start_time = self.find_timestamp_for_position(start_pos, char_mappings)
                             end_time = self.find_timestamp_for_position(end_pos, char_mappings)
                             
-                            # Create dictionary instead of tuple
-                            match_info = {
+                            best_similarity = similarity
+                            best_match = {
                                 'phrase': current_phrase,
                                 'start_time': start_time,
                                 'context': window,
                                 'end_time': end_time,
-                                'clip_path': None  # Will be set after saving the clip
+                                'similarity': similarity
                             }
-                            matches.append(match_info)
                             last_successful_end = end + 1
                 
                 start = last_successful_end if last_successful_end > start else start + 1
+            
+            if best_match:
+                best_matches[phrase] = best_match
         
-        logging.info(f"Found {len(matches)} matches")
-        return matches
+        logging.info(f"Found {len(best_matches)} best matches")
+        return list(best_matches.values())
 
     def download_audio(self, video_id: str, output_dir: str) -> str:
         """
