@@ -139,6 +139,11 @@ class PhraseExtractor:
         Find longest possible matches for each phrase found in Genius with some flexibility
         """
         logging.info("Starting find_matches")
+        
+        if not captions:
+            logging.warning("No captions provided. Exiting find_matches.")
+            return []
+
         merged_text, char_mappings = self.create_merged_text_and_mappings(captions)
         matches = []
         
@@ -148,7 +153,7 @@ class PhraseExtractor:
         SIMILARITY_THRESHOLD = 0.8  # Adjust this for match flexibility
         
         for genius_phrase in genius_phrases:
-            logging.info(f"\nProcessing Genius phrase: '{genius_phrase}'")
+            logging.info(f"Processing Genius phrase: '{genius_phrase}'")
             genius_words = genius_phrase.lower().split()
             best_match = None
             best_match_length = 0
@@ -201,7 +206,7 @@ class PhraseExtractor:
                 matches.append(best_match)
                 logging.info(f"Final match for phrase: '{best_match[0]}'")
         
-        logging.info(f"\nFound {len(matches)} total matches")
+        logging.info(f"Found {len(matches)} total matches")
         return matches
 
     def download_audio(self, video_id: str, output_dir: str) -> str:
@@ -373,7 +378,10 @@ def process_videos(video_ids: List[str], search_phrases: List[str],
     """
     os.makedirs(output_dir, exist_ok=True)
     
-    extractor = PhraseExtractor(search_phrases, lead_seconds, trail_seconds)
+    # Create a single string from all search phrases
+    combined_phrases = ' '.join(search_phrases).lower()
+    
+    extractor = PhraseExtractor([combined_phrases], lead_seconds, trail_seconds)
     results = {}
     
     for video_id in video_ids:

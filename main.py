@@ -7,6 +7,7 @@ from googleapiclient.discovery import build
 from typing import List, Tuple
 import logging
 from youtube_verification import verify_youtube_video
+from pydub import AudioSegment
 
 def search_youtube_video_ids(titles_and_artists: List[Tuple[str, str]], api_key: str, max_results: int = 5) -> List[str]:
     """
@@ -25,6 +26,8 @@ def search_youtube_video_ids(titles_and_artists: List[Tuple[str, str]], api_key:
     
     for title, artist in titles_and_artists:
         search_query = f"{title} {artist}"
+        logging.info(f"Searching YouTube for: {search_query}")
+        
         search_response = youtube.search().list(
             q=search_query,
             part='id',
@@ -32,9 +35,13 @@ def search_youtube_video_ids(titles_and_artists: List[Tuple[str, str]], api_key:
             type='video'
         ).execute()
         
-        for item in search_response['items']:
+        for item in search_response.get('items', []):
             video_id = item['id']['videoId']
+            logging.info(f"Found video ID: {video_id} for query: {search_query}")
             video_ids.append(video_id)
+    
+    if not video_ids:
+        logging.warning("No video IDs found for the given titles and artists.")
     
     return video_ids
 
@@ -71,34 +78,35 @@ def combine_quotes_to_audio(input_text: str, genius_token: str, youtube_api_key:
     
     print(f"Combined audio saved to: {combined_audio_path}")
 
-def combine_audio_clips(results: dict, output_path: str):
-    from pydub import AudioSegment
-    
+def combine_audio_clips(results, output_path):
     combined_audio = AudioSegment.empty()
     
-    for video_id, matches in results.items():
-        for match in matches:
-            clip_path = match['clip_path']
-            clip_audio = AudioSegment.from_mp3(clip_path)
-            combined_audio += clip_audio
+    for result in results:
+        clip_path = result.get('clip_path')
+        if clip_path and os.path.exists(clip_path):
+            audio_clip = AudioSegment.from_file(clip_path)
+            combined_audio += audio_clip
+    
+    if len(combined_audio) == 0:
+        logging.error("No audio clips to combine.")
+        return
     
     combined_audio.export(output_path, format='mp3')
+    logging.info(f"Combined audio exported to {output_path}")
 
 def process_videos(video_ids, phrases, output_dir, youtube_api_key):
     extractor = PhraseExtractor(phrases)
     results = {}
     
     for video_id in video_ids:
-        expected_title, expected_artist = get_expected_track_info(phrases)
-        
-        if not verify_youtube_video(video_id, expected_title, expected_artist, youtube_api_key):
-            logging.warning(f"Skipping video {video_id} as it does not match the expected track.")
-            continue
+        logging.info(f"Processing video {video_id}")
         
         captions = get_captions(video_id)
         if not captions:
-            logging.warning(f"No captions found for video {video_id}")
+            logging.warning(f"No captions found for video {video_id}. Skipping this video.")
             continue
+        
+        logging.info(f"Captions retrieved for video {video_id}: {len(captions)} words")
         
         matches = extractor.find_matches(captions, phrases)
         if not matches:
@@ -135,5 +143,7 @@ if __name__ == "__main__":
 
     genius_token = os.getenv('GENIUS_TOKEN')
     youtube_api_key = os.getenv('YOUTUBE_API_KEY')
+    print(genius_token)
+    print(youtube_api_key)
     
     combine_quotes_to_audio(args.input_text, genius_token, youtube_api_key)

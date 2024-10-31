@@ -59,12 +59,11 @@ class LyricsSplitter:
         logging.info(f"No match found for phrase after {max_retries} retries: {phrase}")
         return None
     
-    def get_title_and_artist(self, phrase: str) -> Tuple[str, str]:
+    def get_title_and_artist(self, phrase: str) -> Tuple[Optional[str], Optional[str]]:
         """
         Retrieve the title and artist for a given phrase from Genius
         """
         logging.info(f"Retrieving title and artist for phrase: {phrase}")
-        # Example implementation
         search_url = f"{self.genius_api.base_url}/search"
         params = {'q': phrase}
         
@@ -74,6 +73,7 @@ class LyricsSplitter:
             hits = response.json().get('response', {}).get('hits', [])
             
             for hit in hits:
+                # Check if the hit is a complete song
                 if hit['result'].get('lyrics_state') == 'complete':
                     title = hit['result']['title']
                     artist = hit['result']['primary_artist']['name']
@@ -83,8 +83,11 @@ class LyricsSplitter:
             logging.info(f"No title and artist found for phrase: {phrase}")
             return None, None
         
+        except requests.exceptions.RequestException as e:
+            logging.error(f"API Request Error: {e}")
+            return None, None
         except Exception as e:
-            logging.error(f"API Error: {e}")
+            logging.error(f"Unexpected Error: {e}")
             return None, None
 
 class GeniusAPI:
