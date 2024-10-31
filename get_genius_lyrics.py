@@ -15,32 +15,50 @@ class LyricsSplitter:
     def split_lyrics(self, text: str) -> Tuple[int, List[str]]:
         logging.info(f"Splitting lyrics for text: '{text}'")
         
-        # Check if the entire text is a valid phrase
-        if self.genius_api.check_phrase_exists(text):
-            logging.info(f"Found match for entire phrase: {text}")
-            return len(text), [text]
-        
-        # If not, attempt to split into smaller phrases
-        best_split = self.find_best_split(text)
-        score = len(best_split) if best_split else 0
-        return score, [best_split] if best_split else []
-    
-    def find_best_split(self, text: str) -> str:
-        logging.info(f"Finding best split for text: '{text}'")
         words = text.split()
-        longest_match = ""
+        phrases = []
+        start = 0
         
-        for start in range(len(words)):
+        while start < len(words):
             current_phrase = ""
+            last_successful_end = start
+            
             for end in range(start, len(words)):
                 current_phrase = " ".join(words[start:end + 1])
-                if not self.genius_api.check_phrase_exists(current_phrase):
-                    break  # Stop if the current phrase is not found
-                longest_match = current_phrase  # Update longest match if found
+                logging.info(f"Checking if phrase exists: {current_phrase}")
+                
+                if self.genius_api.check_phrase_exists(current_phrase):
+                    last_successful_end = end + 1
+                else:
+                    break
+            
+            if last_successful_end > start:
+                successful_phrase = " ".join(words[start:last_successful_end])
+                logging.info(f"Found match for phrase: {successful_phrase}")
+                phrases.append(successful_phrase)
+            
+            start = last_successful_end if last_successful_end > start else start + 1
         
-        logging.info(f"Longest uninterrupted match found: '{longest_match}'")
-        return longest_match
-
+        score = sum(len(phrase) for phrase in phrases)
+        return score, phrases
+    
+    def retry_search(self, phrase: str, max_retries: int = 5) -> Optional[str]:
+        """
+        Retry searching for a phrase in Genius with a limit on retries.
+        """
+        logging.info(f"Retrying search for phrase: '{phrase}'")
+        for attempt in range(max_retries):
+            logging.info(f"Attempt {attempt + 1} for phrase: '{phrase}'")
+            if self.genius_api.check_phrase_exists(phrase):
+                logging.info(f"Found match for phrase on retry: {phrase}")
+                return phrase
+            # Optionally, modify the phrase slightly for the next attempt
+            # For example, remove punctuation or try synonyms
+            # phrase = modify_phrase(phrase)
+        
+        logging.info(f"No match found for phrase after {max_retries} retries: {phrase}")
+        return None
+    
     def get_title_and_artist(self, phrase: str) -> Tuple[str, str]:
         """
         Retrieve the title and artist for a given phrase from Genius

@@ -5,6 +5,7 @@ from get_captions import get_captions
 from get_clips import PhraseExtractor, process_videos
 from googleapiclient.discovery import build
 from typing import List, Tuple
+import logging
 
 def search_youtube_video_ids(titles_and_artists: List[Tuple[str, str]], api_key: str, max_results: int = 5) -> List[str]:
     """
@@ -61,7 +62,7 @@ def combine_quotes_to_audio(input_text: str, genius_token: str, youtube_api_key:
     video_ids = search_youtube_video_ids(titles_and_artists, youtube_api_key)
     
     # Process each video to find and extract clips
-    results = process_videos(video_ids, phrases, output_dir)
+    results = process_videos(video_ids, phrases, output_dir, youtube_api_key)
     
     # Combine the clips into a single audio file with a "chopped and screwed" aesthetic
     combined_audio_path = os.path.join(output_dir, 'combined_audio.mp3')
@@ -81,6 +82,33 @@ def combine_audio_clips(results: dict, output_path: str):
             combined_audio += clip_audio
     
     combined_audio.export(output_path, format='mp3')
+
+def process_videos(video_ids, phrases, output_dir, youtube_api_key):
+    for video_id in video_ids:
+        # Assume you have the expected title and artist for each phrase
+        expected_title, expected_artist = get_expected_track_info(phrases)
+        
+        if not verify_youtube_video(video_id, expected_title, expected_artist, youtube_api_key):
+            logging.warning(f"Skipping video {video_id} as it does not match the expected track.")
+            continue
+        
+        captions = get_captions(video_id)
+        if not captions:
+            logging.warning(f"No captions found for video {video_id}")
+            continue
+        
+        for phrase in phrases:
+            matches = find_matches(captions, phrase)
+            if not matches:
+                logging.info(f"No matches found for phrase: {phrase}. Retrying...")
+                retry_phrase = splitter.retry_search(phrase)
+                if retry_phrase:
+                    matches = find_matches(captions, retry_phrase)
+            
+            # Process matches if found
+            if matches:
+                # Your logic to handle matches
+                pass
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Combine quotes to audio.')
