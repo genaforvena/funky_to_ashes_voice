@@ -6,6 +6,7 @@ from get_clips import PhraseExtractor, process_videos
 from googleapiclient.discovery import build
 from typing import List, Tuple
 import logging
+from youtube_verification import verify_youtube_video
 
 def search_youtube_video_ids(titles_and_artists: List[Tuple[str, str]], api_key: str, max_results: int = 5) -> List[str]:
     """
@@ -84,8 +85,10 @@ def combine_audio_clips(results: dict, output_path: str):
     combined_audio.export(output_path, format='mp3')
 
 def process_videos(video_ids, phrases, output_dir, youtube_api_key):
+    extractor = PhraseExtractor(phrases)
+    results = {}
+    
     for video_id in video_ids:
-        # Assume you have the expected title and artist for each phrase
         expected_title, expected_artist = get_expected_track_info(phrases)
         
         if not verify_youtube_video(video_id, expected_title, expected_artist, youtube_api_key):
@@ -97,18 +100,33 @@ def process_videos(video_ids, phrases, output_dir, youtube_api_key):
             logging.warning(f"No captions found for video {video_id}")
             continue
         
-        for phrase in phrases:
-            matches = find_matches(captions, phrase)
-            if not matches:
-                logging.info(f"No matches found for phrase: {phrase}. Retrying...")
-                retry_phrase = splitter.retry_search(phrase)
-                if retry_phrase:
-                    matches = find_matches(captions, retry_phrase)
-            
-            # Process matches if found
-            if matches:
-                # Your logic to handle matches
-                pass
+        matches = extractor.find_matches(captions, phrases)
+        if not matches:
+            logging.info(f"No matches found for phrases in video {video_id}")
+            continue
+        
+        # Process matches if found
+        # Your logic to handle matches
+        results[video_id] = matches
+    
+    return results
+
+def get_expected_track_info(phrases):
+    """
+    Determine the expected title and artist for each phrase.
+    This is a placeholder implementation and should be replaced with your actual logic.
+    """
+    # Example logic: Assume the first phrase contains the title and artist
+    # This should be replaced with your actual logic to determine the title and artist
+    if phrases:
+        # For demonstration, let's assume the first phrase contains the title and artist
+        # In practice, you might have a more complex logic to determine this
+        title_artist = phrases[0].split(' - ')
+        if len(title_artist) == 2:
+            return title_artist[0], title_artist[1]
+    
+    # Default return if no valid title and artist found
+    return "Unknown Title", "Unknown Artist"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Combine quotes to audio.')

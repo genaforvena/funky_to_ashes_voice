@@ -1,9 +1,9 @@
 import logging
 from googleapiclient.discovery import build
 
-def verify_youtube_video(video_id: str, expected_title: str, expected_artist: str, youtube_api_key: str) -> bool:
+def verify_youtube_video(video_id: str, expected_title: str, youtube_api_key: str) -> bool:
     """
-    Verify that the YouTube video matches the expected track title and artist.
+    Verify that the YouTube video contains the expected track title.
     """
     youtube = build('youtube', 'v3', developerKey=youtube_api_key)
     
@@ -24,13 +24,12 @@ def verify_youtube_video(video_id: str, expected_title: str, expected_artist: st
         logging.info(f"Video title: {video_title}")
         logging.info(f"Video description: {video_description}")
         
-        # Check if the expected title and artist are in the video title or description
+        # Check if the expected title is in the video title or description
         if expected_title.lower() in video_title.lower() or expected_title.lower() in video_description.lower():
-            if expected_artist.lower() in video_title.lower() or expected_artist.lower() in video_description.lower():
-                logging.info("Video matches the expected track.")
-                return True
+            logging.info("Video matches the expected track title.")
+            return True
         
-        logging.info("Video does not match the expected track.")
+        logging.info("Video does not match the expected track title.")
         return False
     
     except Exception as e:
