@@ -340,7 +340,7 @@ def download_audio(video_id: str, output_dir: str = 'temp') -> str:
     """Download audio from a YouTube video using yt-dlp"""
     try:
         os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, f"{video_id}.mp3")
+        output_template = os.path.join(output_dir, f"{video_id}.%(ext)s")
         
         ydl_opts = {
             'format': 'bestaudio/best',
@@ -349,16 +349,21 @@ def download_audio(video_id: str, output_dir: str = 'temp') -> str:
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
-            'outtmpl': output_path,
+            'outtmpl': output_template,
             'quiet': True
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
-            
-        logging.info(f"Successfully downloaded audio for video {video_id}")
-        return output_path
         
+        output_path = os.path.join(output_dir, f"{video_id}.mp3")
+        if os.path.exists(output_path):
+            logging.info(f"Successfully downloaded audio for video {video_id}")
+            return output_path
+        else:
+            logging.error(f"Output file not found at {output_path}")
+            return None
+            
     except Exception as e:
         logging.error(f"Error downloading audio for video {video_id}: {str(e)}")
         return None

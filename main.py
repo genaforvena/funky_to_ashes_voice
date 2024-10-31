@@ -8,6 +8,7 @@ from typing import List, Tuple
 import logging
 from youtube_verification import verify_youtube_video
 from pydub import AudioSegment
+from get_clips import download_audio
 
 def search_youtube_video_ids(titles_and_artists: List[Tuple[str, str]], api_key: str, max_results: int = 5) -> List[str]:
     """
