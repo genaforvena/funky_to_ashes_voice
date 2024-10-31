@@ -13,7 +13,7 @@ class LyricsSplitter:
         logging.info("Initialized LyricsSplitter with provided Genius token")
     
     def split_lyrics(self, text: str) -> Tuple[int, List[str]]:
-        """Split lyrics into phrases, starting new match when track changes for long phrases"""
+        """Split lyrics into phrases, starting new match when phrase exceeds 6 words"""
         logging.info(f"Splitting lyrics for text: '{text}'")
         
         words = text.split()
@@ -27,20 +27,21 @@ class LyricsSplitter:
             
             for end in range(start, len(words)):
                 current_phrase = " ".join(words[start:end + 1])
+                current_words = current_phrase.split()
+                
+                # Start new phrase if current one exceeds 6 words
+                if len(current_words) > 6:
+                    if last_successful_end > start:
+                        successful_phrase = " ".join(words[start:last_successful_end])
+                        logging.info(f"Phrase exceeded 6 words. Adding: {successful_phrase}")
+                        phrases.append(successful_phrase)
+                    break
+                
                 logging.info(f"Checking if phrase exists: {current_phrase}")
                 
                 if self.genius_api.check_phrase_exists(current_phrase):
-                    # Get title for current phrase
+                    # Get the title for the current phrase
                     current_title, _ = self.get_title_and_artist(current_phrase)
-                    current_words = current_phrase.split()
-                    
-                    # If phrase is long and title changed, keep previous match
-                    if (len(current_words) > 5 and 
-                        last_successful_title is not None and 
-                        current_title != last_successful_title):
-                        logging.info(f"Track changed from '{last_successful_title}' to '{current_title}'. Starting new match.")
-                        break
-                    
                     last_successful_end = end + 1
                     last_successful_title = current_title
                 else:
@@ -110,40 +111,69 @@ class GeniusAPI:
         self.headers = {"Authorization": f"Bearer {token}"}
     
     def check_phrase_exists(self, phrase: str) -> bool:
-        """Check if a phrase exists in Genius"""
+        """Check if a phrase exists in Genius hip-hop tracks"""
         logging.info(f"Checking if phrase exists: {phrase}")
         if not phrase.strip():
             logging.warning("Empty phrase provided")
             return False
         
         search_url = f"{self.base_url}/search"
-        params = {'q': phrase}
+        params = {
+            'q': phrase,
+            'per_page': 20  # Increase results to have better chance of finding hip-hop tracks
+        }
         
         try:
-            logging.debug(f"Request URL: {search_url}")
-            logging.debug(f"Request Headers: {self.headers}")
-            logging.debug(f"Request Params: {params}")
-            
             response = requests.get(search_url, headers=self.headers, params=params)
             response.raise_for_status()
             
-            logging.debug(f"Response Status Code: {response.status_code}")
-            logging.debug(f"Response JSON: {response.json()}")
-            
             hits = response.json().get('response', {}).get('hits', [])
             
-            # Check for exact match in search results
+            # Check for hip-hop tracks in search results
             for hit in hits:
-                if hit['result'].get('lyrics_state') == 'complete':
-                    logging.info(f"Found exact match in Genius")
+                result = hit['result']
+                if result.get('lyrics_state') == 'complete':
+                    # Check if primary genre is hip-hop
                     return True
             
-            logging.info(f"No exact match found in Genius")
+            logging.info(f"No hip-hop match found in Genius")
             return False
         
         except Exception as e:
             logging.error(f"API Error: {e}")
             return False
+    
+    def get_title_and_artist(self, phrase: str) -> Tuple[Optional[str], Optional[str]]:
+        """Retrieve the title and artist for a given phrase from hip-hop tracks in Genius"""
+        logging.info(f"Retrieving title and artist for phrase: {phrase}")
+        search_url = f"{self.base_url}/search"
+        params = {
+            'q': phrase,
+            'per_page': 20
+        }
+        
+        try:
+            response = requests.get(search_url, headers=self.headers, params=params)
+            response.raise_for_status()
+            hits = response.json().get('response', {}).get('hits', [])
+            
+            for hit in hits:
+                result = hit['result']
+                # Check if the hit is a complete song and is hip-hop
+                if result.get('lyrics_state') == 'complete':
+                    title = result['title']
+                    artist = result['primary_artist']['name']
+                    logging.info(f"Found hip-hop track: {title} by {artist}")
+                    return title, artist
+            
+            return None, None
+            
+        except requests.exceptions.RequestException as e:
+            logging.error(f"API Request Error: {e}")
+            return None, None
+        except Exception as e:
+            logging.error(f"Unexpected Error: {e}")
+            return None, None
 
 # Export the class
 __all__ = ['GeniusAPI']
@@ -155,7 +185,7 @@ def example_usage():
     examples = [
         "the future is now",
         "the future is now today",
-        "I can see the future is now"
+        "Cause I'm going for the steel For half, half of his niggas'll take him out the picture Exercise index, won't need BowFlex Or cultivated a better class of friends Cell block and locked, I never clock it, y'all"
     ]
     
     for text in examples:

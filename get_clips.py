@@ -139,76 +139,71 @@ class PhraseExtractor:
         matches = []
         logging.info(f"Starting find_matches with {len(phrases)} phrases")
         
+        # Process each phrase, splitting if necessary
         for phrase in phrases:
-            phrase_lower = phrase.lower().strip()
-            phrase_words = phrase_lower.split()
-            best_similarity = 0
-            best_match = None
+            phrase_words = phrase.lower().strip().split()
             
-            # Look for matches in each caption and combinations of captions
-            for i in range(len(captions)):
-                # Try single caption
-                caption = captions[i]
-                caption_text = caption['text'].lower().strip()
-                current_start_time = float(caption['start'])  # Define start time here
+            # If phrase is longer than 6 words, split it into chunks
+            if len(phrase_words) > 6:
+                logging.info(f"Splitting long phrase: '{phrase}'")
+                chunks = []
+                current_chunk = []
                 
-                # Try exact substring match first
-                if phrase_lower in caption_text:
-                    similarity = 1.0
-                else:
-                    # Use fuzzy matching with lower threshold
-                    similarity = SequenceMatcher(None, caption_text, phrase_lower).ratio()
+                for word in phrase_words:
+                    current_chunk.append(word)
+                    if len(current_chunk) == 6:
+                        chunks.append(" ".join(current_chunk))
+                        current_chunk = []
                 
-                if similarity >= 0.6 and similarity > best_similarity:
-                    logging.info(f"Found match for '{phrase}' with similarity {similarity:.2f}")
+                # Add remaining words as last chunk
+                if current_chunk:
+                    chunks.append(" ".join(current_chunk))
+                
+                logging.info(f"Split into chunks: {chunks}")
+                phrases_to_search = chunks
+            else:
+                phrases_to_search = [phrase.lower().strip()]
+            
+            # Search for each phrase/chunk
+            for search_phrase in phrases_to_search:
+                best_similarity = 0
+                best_match = None
+                
+                # Look for matches in each caption
+                for i in range(len(captions)):
+                    caption = captions[i]
+                    caption_text = caption['text'].lower().strip()
                     
-                    if i + 1 < len(captions):
-                        end_time = float(captions[i + 1]['start'])
-                    else:
-                        end_time = float(caption.get('end', current_start_time + 5))
-                    
-                    best_similarity = similarity
-                    best_match = {
-                        'phrase': phrase,
-                        'start_time': current_start_time,
-                        'end_time': end_time,
-                        'context': caption['text'],
-                        'similarity': similarity
-                    }
-                
-                # Try combining with next captions (up to 3)
-                combined_text = caption_text
-                
-                for j in range(i + 1, min(i + 3, len(captions))):
-                    combined_text += " " + captions[j]['text'].lower().strip()
-                    
-                    if phrase_lower in combined_text:
+                    # Try exact substring match first
+                    if search_phrase in caption_text:
                         similarity = 1.0
                     else:
-                        similarity = SequenceMatcher(None, combined_text, phrase_lower).ratio()
+                        # Use fuzzy matching with lower threshold
+                        similarity = SequenceMatcher(None, caption_text, search_phrase).ratio()
                     
                     if similarity >= 0.6 and similarity > best_similarity:
-                        logging.info(f"Found multi-caption match for '{phrase}' with similarity {similarity:.2f}")
+                        logging.info(f"Found match for '{search_phrase}' with similarity {similarity:.2f}")
                         
-                        if j + 1 < len(captions):
-                            end_time = float(captions[j + 1]['start'])
+                        start_time = float(caption['start'])
+                        if i + 1 < len(captions):
+                            end_time = float(captions[i + 1]['start'])
                         else:
-                            end_time = float(captions[j].get('end', current_start_time + 5))
+                            end_time = float(caption.get('end', start_time + 5))
                         
                         best_similarity = similarity
                         best_match = {
-                            'phrase': phrase,
-                            'start_time': current_start_time,
+                            'phrase': search_phrase,
+                            'start_time': start_time,
                             'end_time': end_time,
-                            'context': combined_text,
+                            'context': caption['text'],
                             'similarity': similarity
                         }
-            
-            if best_match:
-                matches.append(best_match)
-                logging.info(f"Added match for phrase: '{phrase}' ({best_match['similarity']:.2f})")
-            else:
-                logging.info(f"No match found for phrase: '{phrase}'")
+                
+                if best_match:
+                    matches.append(best_match)
+                    logging.info(f"Added match for phrase: '{search_phrase}' ({best_similarity:.2f})")
+                else:
+                    logging.info(f"No match found for phrase: '{search_phrase}'")
         
         logging.info(f"Found total {len(matches)} matches")
         return matches
@@ -448,7 +443,9 @@ def process_videos(video_ids: List[str], search_phrases: List[str],
 if __name__ == "__main__":
     setup_logging()
     video_ids = ["ZM5_6js19eM", "SsKT0s5J8ko"]
-    search_phrases = ["I could fly home", "I remember it all", "letter from the government", "I dwell in my cell"]
+    search_phrases = ["I could fly home", 
+                      "Cause I'm going for the steel For half, half of his niggas'll take him out the picture Exercise index, won't need BowFlex Or cultivated a better class of friends Cell block and locked, I never clock it, y'all",
+                      "I remember it all", "letter from the government", "I dwell in my cell"]
     
     results = process_videos(video_ids, search_phrases)
     
