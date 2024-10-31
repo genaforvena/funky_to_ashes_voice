@@ -75,8 +75,7 @@ class PhraseExtractor:
 
     def find_matches(self, captions: List[Dict]) -> List[Tuple[str, float, str, float]]:
         """
-        Find timestamps where phrases appear in captions using a sliding window approach,
-        starting with full phrases and reducing from the end if no match is found
+        Find sequential matches for parts of the input phrase, starting with the longest possible matches
         """
         logging.info("Starting find_matches")
         merged_text, char_mappings = self.create_merged_text_and_mappings(captions)
@@ -88,54 +87,69 @@ class PhraseExtractor:
         SIMILARITY_THRESHOLD = 0.7
         
         for search_phrase in self.phrases:
-            phrase_words = search_phrase.lower().split()
-            if not phrase_words:
-                logging.warning(f"Empty phrase found in search phrases, skipping")
-                continue
-                
-            logging.info(f"\nSearching for phrase: '{search_phrase}' ({len(phrase_words)} words)")
+            remaining_words = search_phrase.lower().split()
+            current_pos = 0
+            phrase_matches = []
             
-            # Start with full phrase, then reduce words from the end
-            for phrase_length in range(len(phrase_words), 0, -1):
-                current_phrase = " ".join(phrase_words[:phrase_length])
-                logging.info(f"Trying with phrase length {phrase_length}: '{current_phrase}'")
-                
-                # Look through transcript
-                current_pos = 0
-                while current_pos <= len(transcript_words) - phrase_length:
-                    # Get window of transcript words
-                    window = " ".join(transcript_words[current_pos:current_pos + phrase_length])
-                    similarity = SequenceMatcher(None, current_phrase.lower(), window.lower()).ratio()
+            logging.info(f"\nSearching for phrase: '{search_phrase}' ({len(remaining_words)} words)")
+            
+            while remaining_words and current_pos < len(transcript_words):
+                # Try to match the longest possible portion of remaining words
+                found_match = False
+                for length in range(len(remaining_words), 0, -1):
+                    current_phrase = " ".join(remaining_words[:length])
+                    logging.info(f"Trying to match: '{current_phrase}' ({length} words)")
                     
-                    if similarity >= SIMILARITY_THRESHOLD:
-                        logging.info(f"Found match with similarity {similarity:.2f}: '{window}'")
+                    # Search through transcript from current position
+                    search_pos = current_pos
+                    while search_pos <= len(transcript_words) - length:
+                        window = " ".join(transcript_words[search_pos:search_pos + length])
+                        similarity = SequenceMatcher(None, current_phrase.lower(), window.lower()).ratio()
                         
-                        # Calculate position and timestamps
-                        start_pos = len(' '.join(transcript_words[:current_pos]))
-                        if current_pos > 0:
-                            start_pos += 1
-                        end_pos = len(' '.join(transcript_words[:current_pos + phrase_length]))
+                        if similarity >= SIMILARITY_THRESHOLD:
+                            logging.info(f"Found match with similarity {similarity:.2f}: '{window}'")
+                            
+                            # Calculate position and timestamps
+                            start_pos = len(' '.join(transcript_words[:search_pos]))
+                            if search_pos > 0:
+                                start_pos += 1
+                            end_pos = len(' '.join(transcript_words[:search_pos + length]))
+                            
+                            start_time = self.find_timestamp_for_position(start_pos, char_mappings)
+                            end_time = self.find_timestamp_for_position(end_pos, char_mappings)
+                            
+                            # Get context
+                            context_start = max(0, start_pos - 50)
+                            context_end = min(len(merged_text), end_pos + 50)
+                            context = merged_text[context_start:context_end]
+                            
+                            logging.info(f"Match found at time {start_time:.2f}s to {end_time:.2f}s")
+                            logging.info(f"Context: ...{context}...")
+                            
+                            phrase_matches.append((current_phrase, start_time, context, end_time))
+                            remaining_words = remaining_words[length:]  # Remove matched words
+                            current_pos = search_pos + length  # Continue search from after this match
+                            found_match = True
+                            break
                         
-                        start_time = self.find_timestamp_for_position(start_pos, char_mappings)
-                        end_time = self.find_timestamp_for_position(end_pos, char_mappings)
-                        
-                        # Get context
-                        context_start = max(0, start_pos - 50)
-                        context_end = min(len(merged_text), end_pos + 50)
-                        context = merged_text[context_start:context_end]
-                        
-                        logging.info(f"Match found at time {start_time:.2f}s to {end_time:.2f}s")
-                        logging.info(f"Context: ...{context}...")
-                        
-                        matches.append((search_phrase, start_time, context, end_time))
-                        current_pos += phrase_length  # Skip past this match
-                        break  # Found a match with this phrase length, try the full phrase again
+                        search_pos += 1
                     
-                    current_pos += 1
+                    if found_match:
+                        break
                 
-                if matches and matches[-1][0] == search_phrase:
-                    # If we found a match for this search phrase, move to next phrase
+                if not found_match:
+                    logging.info(f"Could not find match for remaining words: '{' '.join(remaining_words)}'")
                     break
+            
+            # If we found any matches for this phrase
+            if phrase_matches:
+                # Combine the sequential matches into one
+                combined_phrase = " / ".join(match[0] for match in phrase_matches)
+                start_time = phrase_matches[0][1]
+                end_time = phrase_matches[-1][3]
+                context = phrase_matches[-1][2]  # Use the context from the last match
+                matches.append((search_phrase, start_time, context, end_time))
+                logging.info(f"Combined matches into: '{combined_phrase}'")
         
         logging.info(f"\nFound {len(matches)} total matches")
         return matches
