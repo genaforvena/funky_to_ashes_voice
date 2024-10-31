@@ -32,20 +32,20 @@ class LyricsSplitter:
                 params=params
             )
             response.raise_for_status()
-            
+
             hits = response.json()['response']['hits']
-            for hit in hits:
-                if phrase.lower() in hit['result']['full_title'].lower():
-                    logging.info(f"Phrase found in Genius database: {phrase}")
-                    return True
-            logging.info(f"Phrase not found in Genius database: {phrase}")
-            return False
+            if hits:
+                logging.info(f"Phrase found in Genius database: {phrase}")
+                return True
+            else:
+                logging.info(f"Phrase not found in Genius database: {phrase}")
+                return False
             
         except Exception as e:
             logging.error(f"API Error: {e}")
             return False
 
-    def get_title_and_artist(self, phrase: str) -> Optional[Tuple[str, str]]:
+    def retrieve_title_and_artist(self, phrase: str) -> Tuple[str, str]:
         logging.info(f"Retrieving title and artist for phrase: {phrase}")
         search_url = f"{self.base_url}/search"
         params = {'q': phrase}
@@ -57,20 +57,21 @@ class LyricsSplitter:
                 params=params
             )
             response.raise_for_status()
-            
+
             hits = response.json()['response']['hits']
-            for hit in hits:
-                if phrase.lower() in hit['result']['full_title'].lower():
-                    title = hit['result']['title']
-                    artist = hit['result']['primary_artist']['name']
-                    logging.info(f"Found title '{title}' and artist '{artist}' for phrase: {phrase}")
-                    return title, artist
-            logging.info(f"No title and artist found for phrase: {phrase}")
-            return None
+            if hits:
+                first_hit = hits[0]['result']
+                title = first_hit.get('title', 'Unknown Title')
+                artist = first_hit.get('primary_artist', {}).get('name', 'Unknown Artist')
+                logging.info(f"Found title: {title}, artist: {artist} for phrase: {phrase}")
+                return title, artist
+            else:
+                logging.info(f"No title and artist found for phrase: {phrase}")
+                return "Unknown Title", "Unknown Artist"
             
         except Exception as e:
             logging.error(f"API Error: {e}")
-            return None
+            return "Unknown Title", "Unknown Artist"
 
     def score_split(self, phrases: List[str]) -> float:
         logging.info(f"Scoring split for phrases: {phrases}")
@@ -84,40 +85,22 @@ class LyricsSplitter:
         logging.info(f"Calculated score: {score}")
         return score
 
-    def find_best_split(self, text: str, depth: int = 0, max_depth: int = 3) -> Tuple[float, List[str]]:
-        logging.info(f"Finding best split for text: '{text}' at depth {depth}")
-        if depth >= max_depth:
-            logging.info("Reached maximum recursion depth")
-            return 0, [text]
-            
-        if self.check_phrase_exists(text):
-            whole_score = self.score_split([text])
-            if whole_score > 0:
-                logging.info(f"Whole text is a valid phrase with score: {whole_score}")
-                return whole_score, [text]
-        
-        cache_key = text
-        if cache_key in self.cache:
-            logging.info(f"Cache hit for text: '{text}'")
-            return self.cache[cache_key]
-            
+    def find_best_split(self, text: str) -> Tuple[float, List[str]]:
+        logging.info(f"Finding best split for text: '{text}'")
+        words = text.split()
         best_score = 0
         best_split = [text]
-        
-        words = text.split()
-        for i in range(1, len(words)):
-            left = " ".join(words[:i])
-            right = " ".join(words[i:])
-            
-            left_score, left_splits = self.find_best_split(left, depth + 1, max_depth)
-            right_score, right_splits = self.find_best_split(right, depth + 1, max_depth)
-            
-            combined_score = left_score + right_score
-            if combined_score > best_score:
-                best_score = combined_score
-                best_split = left_splits + right_splits
-        
-        self.cache[cache_key] = (best_score, best_split)
+
+        # Generate all sequences of 3 to 5 words
+        for start in range(len(words)):
+            for end in range(start + 3, min(start + 6, len(words) + 1)):
+                phrase = " ".join(words[start:end])
+                if self.check_phrase_exists(phrase):
+                    score = self.score_split([phrase])
+                    if score > best_score:
+                        best_score = score
+                        best_split = [phrase]
+
         logging.info(f"Best split for text '{text}': Score {best_score}, Splits: {best_split}")
         return best_score, best_split
 
@@ -142,7 +125,7 @@ def example_usage():
         logging.info(f"Best split: Score {score}: {' | '.join(phrases)}")
         
         for phrase in phrases:
-            title_artist = splitter.get_title_and_artist(phrase)
+            title_artist = splitter.retrieve_title_and_artist(phrase)
             if title_artist:
                 title, artist = title_artist
                 logging.info(f"Phrase '{phrase}' found in '{title}' by {artist}")

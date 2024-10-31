@@ -44,7 +44,7 @@ def combine_quotes_to_audio(input_text: str, genius_token: str, youtube_api_key:
     
     titles_and_artists = []
     for phrase in phrases:
-        title_artist = splitter.get_title_and_artist(phrase)
+        title_artist = splitter.retrieve_title_and_artist(phrase)
         if title_artist:
             logging.info(f"Found title and artist for phrase: {phrase}")
             titles_and_artists.append(title_artist)

@@ -4,6 +4,7 @@ from pydub import AudioSegment
 import os
 from datetime import timedelta
 from get_captions import get_captions
+from difflib import SequenceMatcher
 
 class PhraseExtractor:
     def __init__(self, phrases: List[str], lead_seconds: int = 0, trail_seconds: int = 2):
@@ -72,7 +73,7 @@ class PhraseExtractor:
 
     def find_matches(self, captions: List[Dict]) -> List[Tuple[str, float, str, float]]:
         """
-        Find timestamps where phrases appear in captions
+        Find timestamps where phrases appear in captions, allowing for partial matches
         
         Args:
             captions: List of caption dictionaries with 'text' and 'start' keys
@@ -83,25 +84,38 @@ class PhraseExtractor:
         merged_text, char_mappings = self.create_merged_text_and_mappings(captions)
         matches = []
         
+        # Split merged text into words for more efficient searching
+        words = merged_text.split()
+        SIMILARITY_THRESHOLD = 0.7  # 70% similarity required
+        
         for phrase in self.phrases:
-            start_pos = 0
-            while True:
-                # Find the next occurrence of the phrase
-                pos = merged_text.find(phrase, start_pos)
-                if pos == -1:
-                    break
+            phrase_words = phrase.split()
+            phrase_len = len(phrase_words)
+            
+            # Slide through the text word by word
+            for i in range(len(words) - phrase_len + 1):
+                # Get the candidate text of the same length as our phrase
+                candidate = ' '.join(words[i:i + phrase_len])
+                
+                # Calculate similarity ratio
+                similarity = SequenceMatcher(None, phrase, candidate).ratio()
+                
+                if similarity >= SIMILARITY_THRESHOLD:
+                    # Find position in original merged text
+                    pos = len(' '.join(words[:i]))
+                    if i > 0:
+                        pos += 1  # Account for space
+                        
+                    # Get timestamps for the start and end of the match
+                    start_time = self.find_timestamp_for_position(pos, char_mappings)
+                    end_time = self.find_timestamp_for_position(pos + len(candidate), char_mappings)
                     
-                # Get timestamps for the start and end of the phrase
-                start_time = self.find_timestamp_for_position(pos, char_mappings)
-                end_time = self.find_timestamp_for_position(pos + len(phrase), char_mappings)
-                
-                # Extract context (original case) from nearby captions
-                context_start = max(0, pos - 50)
-                context_end = min(len(merged_text), pos + len(phrase) + 50)
-                context = merged_text[context_start:context_end]
-                
-                matches.append((phrase, start_time, context, end_time))
-                start_pos = pos + 1  # Look for next occurrence
+                    # Extract context
+                    context_start = max(0, pos - 50)
+                    context_end = min(len(merged_text), pos + len(candidate) + 50)
+                    context = merged_text[context_start:context_end]
+                    
+                    matches.append((phrase, start_time, context, end_time))
         
         return matches
 
