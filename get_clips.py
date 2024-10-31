@@ -5,6 +5,8 @@ import os
 from datetime import timedelta
 from get_captions import get_captions
 from difflib import SequenceMatcher
+import re
+import logging
 
 class PhraseExtractor:
     def __init__(self, phrases: List[str], lead_seconds: int = 0, trail_seconds: int = 2):
@@ -73,50 +75,69 @@ class PhraseExtractor:
 
     def find_matches(self, captions: List[Dict]) -> List[Tuple[str, float, str, float]]:
         """
-        Find timestamps where phrases appear in captions, allowing for partial matches
-        
-        Args:
-            captions: List of caption dictionaries with 'text' and 'start' keys
-            
-        Returns:
-            List of tuples containing (matched_phrase, start_time, context, end_time)
+        Find timestamps where phrases appear in captions using a sliding window approach,
+        starting with full phrases and reducing from the end if no match is found
         """
+        logging.info("Starting find_matches")
         merged_text, char_mappings = self.create_merged_text_and_mappings(captions)
         matches = []
         
-        # Split merged text into words for more efficient searching
-        words = merged_text.split()
-        SIMILARITY_THRESHOLD = 0.7  # 70% similarity required
+        # Split transcript into words
+        transcript_words = merged_text.lower().split()
+        logging.info(f"Transcript length: {len(transcript_words)} words")
+        SIMILARITY_THRESHOLD = 0.7
         
-        for phrase in self.phrases:
-            phrase_words = phrase.split()
-            phrase_len = len(phrase_words)
+        for search_phrase in self.phrases:
+            phrase_words = search_phrase.lower().split()
+            if not phrase_words:
+                logging.warning(f"Empty phrase found in search phrases, skipping")
+                continue
+                
+            logging.info(f"\nSearching for phrase: '{search_phrase}' ({len(phrase_words)} words)")
             
-            # Slide through the text word by word
-            for i in range(len(words) - phrase_len + 1):
-                # Get the candidate text of the same length as our phrase
-                candidate = ' '.join(words[i:i + phrase_len])
+            # Start with full phrase, then reduce words from the end
+            for phrase_length in range(len(phrase_words), 0, -1):
+                current_phrase = " ".join(phrase_words[:phrase_length])
+                logging.info(f"Trying with phrase length {phrase_length}: '{current_phrase}'")
                 
-                # Calculate similarity ratio
-                similarity = SequenceMatcher(None, phrase, candidate).ratio()
-                
-                if similarity >= SIMILARITY_THRESHOLD:
-                    # Find position in original merged text
-                    pos = len(' '.join(words[:i]))
-                    if i > 0:
-                        pos += 1  # Account for space
+                # Look through transcript
+                current_pos = 0
+                while current_pos <= len(transcript_words) - phrase_length:
+                    # Get window of transcript words
+                    window = " ".join(transcript_words[current_pos:current_pos + phrase_length])
+                    similarity = SequenceMatcher(None, current_phrase.lower(), window.lower()).ratio()
+                    
+                    if similarity >= SIMILARITY_THRESHOLD:
+                        logging.info(f"Found match with similarity {similarity:.2f}: '{window}'")
                         
-                    # Get timestamps for the start and end of the match
-                    start_time = self.find_timestamp_for_position(pos, char_mappings)
-                    end_time = self.find_timestamp_for_position(pos + len(candidate), char_mappings)
+                        # Calculate position and timestamps
+                        start_pos = len(' '.join(transcript_words[:current_pos]))
+                        if current_pos > 0:
+                            start_pos += 1
+                        end_pos = len(' '.join(transcript_words[:current_pos + phrase_length]))
+                        
+                        start_time = self.find_timestamp_for_position(start_pos, char_mappings)
+                        end_time = self.find_timestamp_for_position(end_pos, char_mappings)
+                        
+                        # Get context
+                        context_start = max(0, start_pos - 50)
+                        context_end = min(len(merged_text), end_pos + 50)
+                        context = merged_text[context_start:context_end]
+                        
+                        logging.info(f"Match found at time {start_time:.2f}s to {end_time:.2f}s")
+                        logging.info(f"Context: ...{context}...")
+                        
+                        matches.append((search_phrase, start_time, context, end_time))
+                        current_pos += phrase_length  # Skip past this match
+                        break  # Found a match with this phrase length, try the full phrase again
                     
-                    # Extract context
-                    context_start = max(0, pos - 50)
-                    context_end = min(len(merged_text), pos + len(candidate) + 50)
-                    context = merged_text[context_start:context_end]
-                    
-                    matches.append((phrase, start_time, context, end_time))
+                    current_pos += 1
+                
+                if matches and matches[-1][0] == search_phrase:
+                    # If we found a match for this search phrase, move to next phrase
+                    break
         
+        logging.info(f"\nFound {len(matches)} total matches")
         return matches
 
     def download_audio(self, video_id: str, output_dir: str) -> str:
@@ -178,6 +199,40 @@ class PhraseExtractor:
             
         return clip_paths
 
+    def save_clip(self, start_time: float, end_time: float, phrase: str) -> str:
+        """
+        Save audio clip with a sanitized, shortened filename
+        """
+        # Create a safe, shortened filename
+        safe_phrase = phrase.replace('/', '_AND_')  # Replace phrase separator
+        # Take first 50 chars of phrase and remove/replace invalid characters
+        safe_phrase = re.sub(r'[^\w\s-]', '', safe_phrase[:50])
+        safe_phrase = re.sub(r'[-\s]+', '_', safe_phrase).strip('-_')
+        
+        # Format timestamp
+        timestamp = f"{int(start_time//60):02d}-{int(start_time%60):02d}"
+        
+        # Create final filename
+        filename = f"output/clip_{timestamp}_{safe_phrase}.mp3"
+        
+        # Extract the clip
+        clip = self.audio[start_time * 1000:end_time * 1000]
+        clip.export(filename, format="mp3")
+        
+        return filename
+
+def setup_logging():
+    """Configure logging to avoid duplicates"""
+    logger = logging.getLogger()
+    # Clear any existing handlers
+    logger.handlers = []
+    
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
 def process_videos(video_ids: List[str], search_phrases: List[str], 
                   output_dir: str = 'output',
                   lead_seconds: int = 1,
@@ -238,6 +293,7 @@ def process_videos(video_ids: List[str], search_phrases: List[str],
 
 # Example usage:
 if __name__ == "__main__":
+    setup_logging()
     video_ids = ["ZM5_6js19eM", "SsKT0s5J8ko"]
     search_phrases = ["I could fly home", "I remember it all", "letter from the government", "I dwell in my cell"]
     

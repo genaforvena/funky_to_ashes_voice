@@ -90,16 +90,37 @@ class LyricsSplitter:
         words = text.split()
         best_score = 0
         best_split = [text]
-
-        # Generate all sequences of 3 to 5 words
-        for start in range(len(words)):
-            for end in range(start + 3, min(start + 6, len(words) + 1)):
-                phrase = " ".join(words[start:end])
-                if self.check_phrase_exists(phrase):
-                    score = self.score_split([phrase])
-                    if score > best_score:
-                        best_score = score
-                        best_split = [phrase]
+        
+        current_pos = 0
+        phrases = []
+        
+        while current_pos < len(words):
+            # Start with minimum 3 words
+            current_phrase = " ".join(words[current_pos:current_pos + 3])
+            
+            if not self.check_phrase_exists(current_phrase):
+                # If we can't find even 3 words, move forward by 1
+                current_pos += 1
+                continue
+                
+            # Try to extend the phrase
+            next_pos = current_pos + 3
+            while next_pos < len(words):
+                extended_phrase = " ".join(words[current_pos:next_pos + 1])
+                if self.check_phrase_exists(extended_phrase):
+                    current_phrase = extended_phrase
+                    next_pos += 1
+                else:
+                    break
+                    
+            phrases.append(current_phrase)
+            current_pos = next_pos
+            
+        if phrases:
+            score = self.score_split(phrases)
+            if score > best_score:
+                best_score = score
+                best_split = phrases
 
         logging.info(f"Best split for text '{text}': Score {best_score}, Splits: {best_split}")
         return best_score, best_split
