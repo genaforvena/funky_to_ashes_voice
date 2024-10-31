@@ -9,6 +9,9 @@ import logging
 from youtube_verification import verify_youtube_video
 from pydub import AudioSegment
 from get_clips import download_audio
+from youtube_cache import YouTubeCache
+
+youtube_cache = YouTubeCache()
 
 def search_youtube_video_ids(titles_and_artists: List[Tuple[str, str]], api_key: str, max_results: int = 5) -> List[str]:
     """
@@ -22,6 +25,13 @@ def search_youtube_video_ids(titles_and_artists: List[Tuple[str, str]], api_key:
     Returns:
         List of video IDs
     """
+    # Check cache first
+    cache_key = '_'.join([f"{title}_{artist}" for title, artist in titles_and_artists])
+    cached_results = youtube_cache.get_cached_data(cache_key, 'search')
+    if cached_results:
+        return cached_results.get('video_ids', [])
+    
+    # If not in cache, perform search and save
     youtube = build('youtube', 'v3', developerKey=api_key)
     video_ids = []
     
@@ -44,6 +54,7 @@ def search_youtube_video_ids(titles_and_artists: List[Tuple[str, str]], api_key:
     if not video_ids:
         logging.warning("No video IDs found for the given titles and artists.")
     
+    youtube_cache.save_to_cache(cache_key, 'search', {'video_ids': video_ids})
     return video_ids
 
 def combine_quotes_to_audio(input_text: str, genius_token: str, youtube_api_key: str, output_dir: str = 'output'):
@@ -123,25 +134,25 @@ def combine_audio_clips(results, output_path):
     logging.info(f"Combined audio exported to {output_path}")
 
 def process_videos(video_ids, phrases, output_dir, youtube_api_key):
-    extractor = PhraseExtractor(phrases)
-    best_matches = {}  # Dictionary to store best match for each phrase
-    processed_phrases = set()  # Track which phrases have been matched
+    # Create temp directory
+    os.makedirs('temp', exist_ok=True)
     
+    # Initialize tracking variables
+    processed_phrases = set()
+    best_matches = {}
+    
+    results = []
     for video_id in video_ids:
         try:
-            # Skip this video if we've already found matches for all phrases
-            if len(processed_phrases) == len(phrases):
-                break
-                
             logging.info(f"Processing video {video_id}")
-            audio_path = None  # Initialize audio_path at the start of each iteration
+            audio_path = None
             
             # Get captions and check if they exist
             captions = get_captions(video_id)
             if captions is None:
                 logging.warning(f"No captions found for video {video_id}. Skipping...")
                 continue
-            
+                
             # Find matches only for unmatched phrases
             unmatched_phrases = [p for p in phrases if str(p) not in processed_phrases]
             matches = extractor.find_matches(captions, unmatched_phrases)
@@ -158,6 +169,26 @@ def process_videos(video_ids, phrases, output_dir, youtube_api_key):
             
             # Extract clips for each match
             clip_paths = extractor.extract_clips(audio_path, matches, output_dir)
+            
+            # Update best matches and processed phrases
+            for match, clip_path in zip(matches, clip_paths):
+                phrase = match['phrase']
+                similarity = match['similarity']
+                
+                if (phrase not in best_matches or 
+                    similarity > best_matches[phrase]['similarity']):
+                    match['clip_path'] = clip_path
+                    best_matches[phrase] = match
+                    processed_phrases.add(str(phrase))
+                    logging.info(f"Found match for '{phrase}' with similarity {similarity:.2f}")
+                else:
+                    # Clean up unused clip
+                    if os.path.exists(clip_path):
+                        os.remove(clip_path)
+                
+            # When creating clip path, use temp directory
+            clip_filename = f"clip_{timestamp}_{phrase}.mp3".replace(" ", "_")
+            clip_path = os.path.join('temp', clip_filename)
             
             # Update best matches and processed phrases
             for match, clip_path in zip(matches, clip_paths):
