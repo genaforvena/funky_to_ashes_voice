@@ -123,7 +123,7 @@ class GeniusAPI:
         search_url = f"{self.base_url}/search"
         params = {
             'q': phrase,
-            'per_page': 20  # Increase results to have better chance of finding hip-hop tracks
+            'per_page': 20  # Get more results to try
         }
         
         try:
@@ -132,29 +132,34 @@ class GeniusAPI:
             
             hits = response.json().get('response', {}).get('hits', [])
             
-            # Check for hip-hop tracks in search results
+            # Log all potential matches
             for hit in hits:
                 result = hit['result']
+                title = result.get('title', 'Unknown')
+                artist = result.get('primary_artist', {}).get('name', 'Unknown')
+                logging.info(f"Found potential match: '{title}' by {artist}")
+                
                 if result.get('lyrics_state') == 'complete':
-                    # Check if primary genre is hip-hop
+                    logging.info(f"Found valid match in '{title}' by {artist}")
                     return True
             
-            logging.info(f"No hip-hop match found in Genius")
+            logging.info(f"No matches found in {len(hits)} results from Genius")
             return False
-        
+            
         except Exception as e:
             logging.error(f"API Error: {e}")
             return False
     
-    def get_title_and_artist(self, phrase: str) -> Tuple[Optional[str], Optional[str]]:
-        """Retrieve the title and artist for a given phrase from hip-hop tracks in Genius"""
-        logging.info(f"Retrieving title and artist for phrase: {phrase}")
+    def get_title_and_artist(self, phrase: str) -> List[Tuple[str, str]]:
+        """Retrieve all matching titles and artists for a given phrase"""
+        logging.info(f"Retrieving titles and artists for phrase: {phrase}")
         search_url = f"{self.base_url}/search"
         params = {
             'q': phrase,
             'per_page': 20
         }
         
+        matches = []
         try:
             response = requests.get(search_url, headers=self.headers, params=params)
             response.raise_for_status()
@@ -162,21 +167,23 @@ class GeniusAPI:
             
             for hit in hits:
                 result = hit['result']
-                # Check if the hit is a complete song and is hip-hop
                 if result.get('lyrics_state') == 'complete':
                     title = result['title']
                     artist = result['primary_artist']['name']
-                    logging.info(f"Found hip-hop track: {title} by {artist}")
-                    return title, artist
+                    matches.append((title, artist))
+                    logging.info(f"Found match: '{title}' by {artist}")
             
-            return None, None
+            if not matches:
+                logging.info(f"No matches found for phrase: '{phrase}'")
+            
+            return matches
             
         except requests.exceptions.RequestException as e:
             logging.error(f"API Request Error: {e}")
-            return None, None
+            return []
         except Exception as e:
             logging.error(f"Unexpected Error: {e}")
-            return None, None
+            return []
 
 # Export the class
 __all__ = ['GeniusAPI']

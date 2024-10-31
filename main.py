@@ -58,63 +58,69 @@ def search_youtube_video_ids(titles_and_artists: List[Tuple[str, str]], api_key:
     return video_ids
 
 def combine_quotes_to_audio(input_text: str, genius_token: str, youtube_api_key: str, output_dir: str = 'output'):
-    # Initialize the LyricsSplitter with the Genius API token
     splitter = LyricsSplitter(genius_token)
     remaining_text = input_text
-    all_results = []  # Store all results across iterations
+    all_results = []
     
-    # Iteratively process the text with smaller and smaller chunks
     while remaining_text:
-        # Split the remaining text into phrases
         score, phrases = splitter.split_lyrics(remaining_text)
         phrases_str = [str(phrase) for phrase in phrases]
         
         print(f"Attempting split: Score {score}: {' | '.join(phrases_str)}")
         
-        # Get title and artist for each phrase
-        titles_and_artists = []
+        # Get ALL titles and artists for each phrase
+        all_titles_and_artists = []
         for phrase in phrases:
-            title_artist = splitter.get_title_and_artist(phrase)
-            if title_artist:
-                titles_and_artists.append(title_artist)
+            matches = splitter.get_title_and_artist(phrase)
+            if matches:
+                all_titles_and_artists.extend(matches)
+                logging.info(f"Found {len(matches)} potential matches for phrase '{phrase}'")
             else:
                 print(f"Phrase '{phrase}' not found in Genius database")
         
-        # Search for YouTube video IDs based on titles and artists
-        video_ids = search_youtube_video_ids(titles_and_artists, youtube_api_key)
-        
-        # Process videos and get matches
-        results = process_videos(video_ids, phrases, output_dir, youtube_api_key)
-        
-        # Add new results to all_results
-        if results:
-            all_results.extend(results)
+        if all_titles_and_artists:
+            # Search for YouTube videos for all matches
+            video_ids = search_youtube_video_ids(all_titles_and_artists, youtube_api_key)
             
-            # Update remaining text by removing matched phrases
-            matched_phrases = {result['phrase'] for result in results}
-            remaining_phrases = [str(phrase) for phrase in phrases if str(phrase) not in matched_phrases]
-            remaining_text = ' '.join(remaining_phrases)
+            # Process videos and get matches
+            results = process_videos(video_ids, phrases, output_dir, youtube_api_key)
             
-            if remaining_text:
-                print(f"Remaining text to process: {remaining_text}")
+            if results:
+                all_results.extend(results)
+                matched_phrases = {result['phrase'] for result in results}
+                remaining_phrases = [str(phrase) for phrase in phrases if str(phrase) not in matched_phrases]
+                remaining_text = ' '.join(remaining_phrases)
+                
+                if remaining_text:
+                    print(f"Remaining text to process: {remaining_text}")
+            else:
+                # If no matches found with current chunk size
+                if len(phrases) > 1:
+                    splitter.reduce_chunk_size()
+                    print("No matches found, reducing chunk size and retrying...")
+                else:
+                    print(f"Warning: Could not find match for: {remaining_text}")
+                    break
         else:
-            # If no matches found, try with smaller chunks
+            # No Genius matches found for any phrase
             if len(phrases) > 1:
                 splitter.reduce_chunk_size()
-                print("No matches found, reducing chunk size and retrying...")
+                print("No Genius matches found, reducing chunk size and retrying...")
             else:
-                print(f"Warning: Could not find match for: {remaining_text}")
+                print(f"Warning: Could not find any Genius matches for: {remaining_text}")
                 break
     
-    # Sort results by their original order in the input text
+    # Sort and combine results
     all_results.sort(key=lambda x: input_text.find(x['phrase']))
     
-    # Combine all matched clips into final audio
-    combined_audio_path = os.path.join(output_dir, 'combined_audio.mp3')
-    combine_audio_clips(all_results, combined_audio_path)
+    if all_results:
+        combined_audio_path = os.path.join(output_dir, 'combined_audio.mp3')
+        combine_audio_clips(all_results, combined_audio_path)
+        print(f"Combined audio saved to: {combined_audio_path}")
+    else:
+        print("No matches found for any phrases")
     
-    print(f"Combined audio saved to: {combined_audio_path}")
-    return all_results  # Return all results for potential further processing
+    return all_results
 
 def combine_audio_clips(results, output_path):
     """Combine audio clips in the order they appear in results"""
