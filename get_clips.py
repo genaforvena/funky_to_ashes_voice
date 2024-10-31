@@ -135,60 +135,78 @@ class PhraseExtractor:
         return char_mappings[-1][1]  # Return last timestamp if position is beyond end
 
     def find_matches(self, captions: List[Dict], phrases: List[str]) -> List[Dict]:
-        """Find matches for phrases in captions using incremental matching"""
-        best_matches = {}  # Dictionary to store best match for each phrase
-        merged_text, char_mappings = self.create_merged_text_and_mappings(captions)
-        merged_text = merged_text.lower()
-        
-        logging.info(f"Starting find_matches")
+        """Find matches for phrases in captions"""
+        matches = []
+        logging.info(f"Starting find_matches with {len(phrases)} phrases")
         
         for phrase in phrases:
-            words = phrase.lower().split()
-            start = 0
+            phrase_lower = phrase.lower()
             best_similarity = 0
             best_match = None
             
-            while start < len(words):
-                current_phrase = ""
-                last_successful_end = start
+            # Look for exact matches in each caption
+            for i, caption in enumerate(captions):
+                caption_text = caption['text'].lower()
+                similarity = SequenceMatcher(None, caption_text, phrase_lower).ratio()
                 
-                # Try increasingly longer segments
-                for end in range(start, len(words)):
-                    current_phrase = " ".join(words[start:end + 1])
-                    logging.info(f"Checking segment: {current_phrase}")
+                if similarity >= 0.8 and similarity > best_similarity:
+                    logging.info(f"Found match for '{phrase}' with similarity {similarity:.2f}")
                     
-                    # Look for this segment in captions
-                    transcript_words = merged_text.split()
-                    for i in range(len(transcript_words) - (end - start + 1) + 1):
-                        window = " ".join(transcript_words[i:i + (end - start + 1)])
-                        similarity = SequenceMatcher(None, window, current_phrase).ratio()
+                    start_time = float(caption['start'])
+                    
+                    # Find the next caption for end time
+                    if i + 1 < len(captions):
+                        end_time = float(captions[i + 1]['start'])
+                    else:
+                        end_time = float(caption.get('end', start_time + 5))
+                    
+                    best_similarity = similarity
+                    best_match = {
+                        'phrase': phrase,
+                        'start_time': start_time,
+                        'end_time': end_time,
+                        'context': caption['text'],
+                        'similarity': similarity
+                    }
+            
+            # If no exact match found, try finding the phrase across consecutive captions
+            if not best_match:
+                for i in range(len(captions)):
+                    combined_text = ""
+                    start_idx = i
+                    
+                    # Try combining up to 3 consecutive captions
+                    for j in range(i, min(i + 3, len(captions))):
+                        combined_text += " " + captions[j]['text'].lower()
+                        combined_text = combined_text.strip()
                         
-                        if similarity >= 0.8 and similarity > best_similarity:  # Keep track of best match
-                            logging.info(f"Found better match with similarity {similarity:.2f}")
+                        similarity = SequenceMatcher(None, combined_text, phrase_lower).ratio()
+                        if similarity >= 0.8 and similarity > best_similarity:
+                            logging.info(f"Found multi-caption match for '{phrase}' with similarity {similarity:.2f}")
                             
-                            # Calculate positions and timestamps
-                            start_pos = merged_text.find(window)
-                            end_pos = start_pos + len(window)
-                            start_time = self.find_timestamp_for_position(start_pos, char_mappings)
-                            end_time = self.find_timestamp_for_position(end_pos, char_mappings)
+                            start_time = float(captions[start_idx]['start'])
+                            
+                            # End time is start of the next caption after the match
+                            if j + 1 < len(captions):
+                                end_time = float(captions[j + 1]['start'])
+                            else:
+                                end_time = float(captions[j].get('end', start_time + 5))
                             
                             best_similarity = similarity
                             best_match = {
-                                'phrase': current_phrase,
+                                'phrase': phrase,
                                 'start_time': start_time,
-                                'context': window,
                                 'end_time': end_time,
+                                'context': combined_text,
                                 'similarity': similarity
                             }
-                            last_successful_end = end + 1
-                
-                start = last_successful_end if last_successful_end > start else start + 1
             
             if best_match:
-                best_matches[phrase] = best_match
+                matches.append(best_match)
+                logging.info(f"Added match for phrase: '{phrase}' ({best_match['similarity']:.2f})")
         
-        logging.info(f"Found {len(best_matches)} best matches")
-        return list(best_matches.values())
+        logging.info(f"Found total {len(matches)} matches")
+        return matches
 
     def download_audio(self, video_id: str, output_dir: str) -> str:
         """

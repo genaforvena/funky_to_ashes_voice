@@ -13,6 +13,7 @@ class LyricsSplitter:
         logging.info("Initialized LyricsSplitter with provided Genius token")
     
     def split_lyrics(self, text: str) -> Tuple[int, List[str]]:
+        """Split lyrics into phrases, starting new match when track changes for long phrases"""
         logging.info(f"Splitting lyrics for text: '{text}'")
         
         words = text.split()
@@ -22,13 +23,26 @@ class LyricsSplitter:
         while start < len(words):
             current_phrase = ""
             last_successful_end = start
+            last_successful_title = None
             
             for end in range(start, len(words)):
                 current_phrase = " ".join(words[start:end + 1])
                 logging.info(f"Checking if phrase exists: {current_phrase}")
                 
                 if self.genius_api.check_phrase_exists(current_phrase):
+                    # Get title for current phrase
+                    current_title, _ = self.get_title_and_artist(current_phrase)
+                    current_words = current_phrase.split()
+                    
+                    # If phrase is long and title changed, keep previous match
+                    if (len(current_words) > 5 and 
+                        last_successful_title is not None and 
+                        current_title != last_successful_title):
+                        logging.info(f"Track changed from '{last_successful_title}' to '{current_title}'. Starting new match.")
+                        break
+                    
                     last_successful_end = end + 1
+                    last_successful_title = current_title
                 else:
                     break
             
