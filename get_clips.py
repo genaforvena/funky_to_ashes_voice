@@ -354,6 +354,15 @@ def download_audio(video_id: str, output_dir: str = 'temp') -> str:
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # Extract video info first to check duration
+            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+            duration = info.get('duration', 0)  # Duration in seconds
+            
+            if duration > 600:  # 10 minutes = 600 seconds
+                logging.warning(f"Video {video_id} is too long ({duration/60:.1f} minutes). Skipping...")
+                return None
+                
+            # If duration is acceptable, proceed with download
             ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
         
         output_path = os.path.join(output_dir, f"{video_id}.mp3")
