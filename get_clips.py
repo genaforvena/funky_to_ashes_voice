@@ -192,29 +192,50 @@ class PhraseExtractor:
 
     def download_audio(self, video_id: str, output_dir: str) -> str:
         """
-        Download audio from YouTube video
+        Download audio from YouTube video if it's under 10 minutes
         
         Args:
             video_id: YouTube video ID
             output_dir: Directory to save the audio file
             
         Returns:
-            Path to downloaded audio file
+            Path to downloaded audio file or None if video is too long
         """
+        # First, extract video info without downloading
         ydl_opts = {
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'outtmpl': f'{output_dir}/{video_id}.%(ext)s'
+            'quiet': True,
+            'extract_flat': True,
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
-        
-        return f'{output_dir}/{video_id}.mp3'
+            try:
+                info = ydl.extract_info(f'https://www.youtube.com/watch?v={video_id}', download=False)
+                duration = info.get('duration', 0)
+                
+                # Skip if video is longer than 10 minutes
+                if duration > 600:  # 600 seconds = 10 minutes
+                    logging.info(f"Skipping video {video_id} - duration {duration}s exceeds 10 minutes")
+                    return None
+                    
+                # If video is under 10 minutes, proceed with download
+                ydl_opts = {
+                    'format': 'bestaudio/best',
+                    'postprocessors': [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': '192',
+                    }],
+                    'outtmpl': f'{output_dir}/{video_id}.%(ext)s'
+                }
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
+                
+                return f'{output_dir}/{video_id}.mp3'
+                
+            except Exception as e:
+                logging.error(f"Error downloading video {video_id}: {str(e)}")
+                return None
 
     def extract_clips(self, audio_path: str, matches: List[Dict], output_dir: str) -> List[str]:
         """
