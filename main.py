@@ -48,33 +48,60 @@ def search_youtube_video_ids(titles_and_artists: List[Tuple[str, str]], api_key:
 def combine_quotes_to_audio(input_text: str, genius_token: str, youtube_api_key: str, output_dir: str = 'output'):
     # Initialize the LyricsSplitter with the Genius API token
     splitter = LyricsSplitter(genius_token)
+    remaining_text = input_text
+    all_results = []
     
-    # Assuming split_lyrics returns a tuple (score, list_of_phrases)
-    score, phrases = splitter.split_lyrics(input_text)
-    
-    # Convert all elements in phrases to strings before joining
-    phrases_str = [str(phrase) for phrase in phrases]
-    
-    print(f"Best split: Score {score}: {' | '.join(phrases_str)}")
-    
-    # Get title and artist for each phrase
-    titles_and_artists = []
-    for phrase in phrases:
-        title_artist = splitter.get_title_and_artist(phrase)
-        if title_artist:
-            titles_and_artists.append(title_artist)
+    # Iteratively process the text with smaller and smaller chunks
+    while remaining_text:
+        # Split the remaining text into phrases
+        score, phrases = splitter.split_lyrics(remaining_text)
+        phrases_str = [str(phrase) for phrase in phrases]
+        
+        print(f"Attempting split: Score {score}: {' | '.join(phrases_str)}")
+        
+        # Get title and artist for each phrase
+        titles_and_artists = []
+        for phrase in phrases:
+            title_artist = splitter.get_title_and_artist(phrase)
+            if title_artist:
+                titles_and_artists.append(title_artist)
+            else:
+                print(f"Phrase '{phrase}' not found in Genius database")
+        
+        # Search for YouTube video IDs based on titles and artists
+        video_ids = search_youtube_video_ids(titles_and_artists, youtube_api_key)
+        
+        # Process videos and get matches
+        results = process_videos(video_ids, phrases, output_dir, youtube_api_key)
+        
+        # Update remaining text by removing matched phrases
+        matched_phrases = {result['phrase'] for result in results}
+        remaining_phrases = []
+        
+        for phrase in phrases:
+            if str(phrase) not in matched_phrases:
+                remaining_phrases.append(str(phrase))
+        
+        # If we found matches, remove them from remaining_text and continue
+        if matched_phrases:
+            all_results.extend(results)
+            remaining_text = ' '.join(remaining_phrases)
+            if remaining_text:
+                print(f"Remaining text to process: {remaining_text}")
         else:
-            print(f"Phrase '{phrase}' not found in Genius database")
+            # If no matches found, try with smaller chunks
+            if len(phrases) > 1:
+                # Reduce chunk size for next iteration
+                splitter.reduce_chunk_size()
+                print("No matches found, reducing chunk size and retrying...")
+            else:
+                # If we're already at single words and still no match, skip this word
+                print(f"Warning: Could not find match for: {remaining_text}")
+                break
     
-    # Search for YouTube video IDs based on titles and artists
-    video_ids = search_youtube_video_ids(titles_and_artists, youtube_api_key)
-    
-    # Process each video to find and extract clips
-    results = process_videos(video_ids, phrases, output_dir, youtube_api_key)
-    
-    # Combine the clips into a single audio file with a "chopped and screwed" aesthetic
+    # Combine all matched clips into final audio
     combined_audio_path = os.path.join(output_dir, 'combined_audio.mp3')
-    combine_audio_clips(results, combined_audio_path)
+    combine_audio_clips(all_results, combined_audio_path)
     
     print(f"Combined audio saved to: {combined_audio_path}")
 
@@ -97,10 +124,16 @@ def combine_audio_clips(results, output_path):
 def process_videos(video_ids, phrases, output_dir, youtube_api_key):
     extractor = PhraseExtractor(phrases)
     best_matches = {}  # Dictionary to store best match for each phrase
+    processed_phrases = set()  # Track which phrases have been matched
     
     for video_id in video_ids:
         try:
+            # Skip this video if we've already found matches for all phrases
+            if len(processed_phrases) == len(phrases):
+                break
+                
             logging.info(f"Processing video {video_id}")
+            audio_path = None  # Initialize audio_path at the start of each iteration
             
             # Get captions and check if they exist
             captions = get_captions(video_id)
@@ -108,21 +141,24 @@ def process_videos(video_ids, phrases, output_dir, youtube_api_key):
                 logging.warning(f"No captions found for video {video_id}. Skipping...")
                 continue
             
-            logging.info(f"Captions retrieved for video {video_id}: {len(captions)} words")
+            # Find matches only for unmatched phrases
+            unmatched_phrases = [p for p in phrases if str(p) not in processed_phrases]
+            matches = extractor.find_matches(captions, unmatched_phrases)
             
-            # Download audio for this video
-            audio_path = extractor.download_audio(video_id, output_dir)
-            
-            # Find matches in captions
-            matches = extractor.find_matches(captions, phrases)
             if not matches:
                 logging.info(f"No matches found for phrases in video {video_id}")
+                continue
+            
+            # Download audio only if we found matches
+            audio_path = download_audio(video_id)
+            if not audio_path:
+                logging.warning(f"Failed to download audio for video {video_id}")
                 continue
             
             # Extract clips for each match
             clip_paths = extractor.extract_clips(audio_path, matches, output_dir)
             
-            # Update best matches if current match is better
+            # Update best matches and processed phrases
             for match, clip_path in zip(matches, clip_paths):
                 phrase = match['phrase']
                 similarity = match['similarity']
@@ -131,7 +167,8 @@ def process_videos(video_ids, phrases, output_dir, youtube_api_key):
                     similarity > best_matches[phrase]['similarity']):
                     match['clip_path'] = clip_path
                     best_matches[phrase] = match
-                    logging.info(f"Found better match for '{phrase}' with similarity {similarity:.2f}")
+                    processed_phrases.add(str(phrase))
+                    logging.info(f"Found match for '{phrase}' with similarity {similarity:.2f}")
                 else:
                     # Clean up unused clip
                     if os.path.exists(clip_path):
@@ -144,7 +181,10 @@ def process_videos(video_ids, phrases, output_dir, youtube_api_key):
         finally:
             # Clean up downloaded audio file
             if audio_path and os.path.exists(audio_path):
-                os.remove(audio_path)
+                try:
+                    os.remove(audio_path)
+                except Exception as e:
+                    logging.error(f"Error removing audio file {audio_path}: {str(e)}")
     
     # Convert dictionary to list of best matches
     results = list(best_matches.values())

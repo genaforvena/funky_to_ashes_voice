@@ -139,121 +139,79 @@ class PhraseExtractor:
         matches = []
         logging.info(f"Starting find_matches with {len(phrases)} phrases")
         
-        # Process each phrase, splitting if necessary
         for phrase in phrases:
-            phrase_words = phrase.lower().strip().split()
+            phrase_lower = phrase.lower().strip()
+            best_similarity = 0
+            best_match = None
             
-            # If phrase is longer than 6 words, split it into chunks
-            if len(phrase_words) > 6:
-                logging.info(f"Splitting long phrase: '{phrase}'")
-                chunks = []
-                current_chunk = []
+            # Look for matches in each caption and combinations of captions
+            for i in range(len(captions)):
+                caption = captions[i]
+                caption_text = caption['text'].lower().strip()
+                start_time = float(caption['start'])
                 
-                for word in phrase_words:
-                    current_chunk.append(word)
-                    if len(current_chunk) == 6:
-                        chunks.append(" ".join(current_chunk))
-                        current_chunk = []
+                # Try exact substring match first
+                if phrase_lower in caption_text:
+                    similarity = 1.0
+                else:
+                    # Use fuzzy matching with lower threshold
+                    similarity = SequenceMatcher(None, caption_text, phrase_lower).ratio()
                 
-                # Add remaining words as last chunk
-                if current_chunk:
-                    chunks.append(" ".join(current_chunk))
-                
-                logging.info(f"Split into chunks: {chunks}")
-                phrases_to_search = chunks
-            else:
-                phrases_to_search = [phrase.lower().strip()]
-            
-            # Search for each phrase/chunk
-            for search_phrase in phrases_to_search:
-                best_similarity = 0
-                best_match = None
-                
-                # Look for matches in each caption
-                for i in range(len(captions)):
-                    caption = captions[i]
-                    caption_text = caption['text'].lower().strip()
+                if similarity >= 0.6 and similarity > best_similarity:
+                    logging.info(f"Found match for '{phrase}' with similarity {similarity:.2f}")
                     
-                    # Try exact substring match first
-                    if search_phrase in caption_text:
+                    # Calculate end time
+                    if i + 1 < len(captions):
+                        end_time = float(captions[i + 1]['start'])
+                    else:
+                        end_time = float(caption.get('end', start_time + 5))
+                    
+                    best_similarity = similarity
+                    best_match = {
+                        'phrase': phrase,
+                        'start_time': start_time,
+                        'end_time': end_time,
+                        'context': caption['text'],
+                        'similarity': similarity
+                    }
+                
+                # Try combining with next captions (up to 3)
+                combined_text = caption_text
+                combined_start = start_time
+                
+                for j in range(i + 1, min(i + 3, len(captions))):
+                    combined_text += " " + captions[j]['text'].lower().strip()
+                    
+                    if phrase_lower in combined_text:
                         similarity = 1.0
                     else:
-                        # Use fuzzy matching with lower threshold
-                        similarity = SequenceMatcher(None, caption_text, search_phrase).ratio()
+                        similarity = SequenceMatcher(None, combined_text, phrase_lower).ratio()
                     
                     if similarity >= 0.6 and similarity > best_similarity:
-                        logging.info(f"Found match for '{search_phrase}' with similarity {similarity:.2f}")
+                        logging.info(f"Found multi-caption match for '{phrase}' with similarity {similarity:.2f}")
                         
-                        start_time = float(caption['start'])
-                        if i + 1 < len(captions):
-                            end_time = float(captions[i + 1]['start'])
+                        if j + 1 < len(captions):
+                            end_time = float(captions[j + 1]['start'])
                         else:
-                            end_time = float(caption.get('end', start_time + 5))
+                            end_time = float(captions[j].get('end', float(captions[j]['start']) + 5))
                         
                         best_similarity = similarity
                         best_match = {
-                            'phrase': search_phrase,
-                            'start_time': start_time,
+                            'phrase': phrase,
+                            'start_time': combined_start,
                             'end_time': end_time,
-                            'context': caption['text'],
+                            'context': combined_text,
                             'similarity': similarity
                         }
-                
-                if best_match:
-                    matches.append(best_match)
-                    logging.info(f"Added match for phrase: '{search_phrase}' ({best_similarity:.2f})")
-                else:
-                    logging.info(f"No match found for phrase: '{search_phrase}'")
+            
+            if best_match:
+                matches.append(best_match)
+                logging.info(f"Added match for phrase: '{phrase}' ({best_match['similarity']:.2f})")
+            else:
+                logging.info(f"No match found for phrase: '{phrase}'")
         
         logging.info(f"Found total {len(matches)} matches")
         return matches
-
-    def download_audio(self, video_id: str, output_dir: str) -> str:
-        """
-        Download audio from YouTube video if it's under 10 minutes
-        
-        Args:
-            video_id: YouTube video ID
-            output_dir: Directory to save the audio file
-            
-        Returns:
-            Path to downloaded audio file or None if video is too long
-        """
-        # First, extract video info without downloading
-        ydl_opts = {
-            'quiet': True,
-            'extract_flat': True,
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            try:
-                info = ydl.extract_info(f'https://www.youtube.com/watch?v={video_id}', download=False)
-                duration = info.get('duration', 0)
-                
-                # Skip if video is longer than 10 minutes
-                if duration > 600:  # 600 seconds = 10 minutes
-                    logging.info(f"Skipping video {video_id} - duration {duration}s exceeds 10 minutes")
-                    return None
-                    
-                # If video is under 10 minutes, proceed with download
-                ydl_opts = {
-                    'format': 'bestaudio/best',
-                    'postprocessors': [{
-                        'key': 'FFmpegExtractAudio',
-                        'preferredcodec': 'mp3',
-                        'preferredquality': '192',
-                    }],
-                    'outtmpl': f'{output_dir}/{video_id}.%(ext)s'
-                }
-                
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
-                
-                return f'{output_dir}/{video_id}.mp3'
-                
-            except Exception as e:
-                logging.error(f"Error downloading video {video_id}: {str(e)}")
-                return None
 
     def extract_clips(self, audio_path: str, matches: List[Dict], output_dir: str) -> List[str]:
         """
@@ -378,74 +336,99 @@ def setup_logging():
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
-def process_videos(video_ids: List[str], search_phrases: List[str], 
-                  output_dir: str = 'output',
-                  lead_seconds: int = 1,
-                  trail_seconds: int = 2) -> Dict[str, List[Dict]]:
-    """
-    Main function to process multiple videos and find phrases
-    """
-    os.makedirs(output_dir, exist_ok=True)
-    
-    extractor = PhraseExtractor(search_phrases, lead_seconds, trail_seconds)
-    results = {}
+def download_audio(video_id: str, output_dir: str = 'temp') -> str:
+    """Download audio from a YouTube video using yt-dlp"""
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, f"{video_id}.mp3")
+        
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'outtmpl': output_path,
+            'quiet': True
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+            
+        logging.info(f"Successfully downloaded audio for video {video_id}")
+        return output_path
+        
+    except Exception as e:
+        logging.error(f"Error downloading audio for video {video_id}: {str(e)}")
+        return None
+
+def process_videos(video_ids: List[str], phrases: List[str], output_dir: str, youtube_api_key: str) -> List[Dict]:
+    """Process videos to find and extract matching phrases"""
+    extractor = PhraseExtractor(phrases)
+    best_matches = {}
+    processed_phrases = set()
     
     for video_id in video_ids:
         try:
+            if len(processed_phrases) == len(phrases):
+                break
+                
             logging.info(f"Processing video {video_id}")
+            audio_path = None
             
-            # Get captions using the provided function
             captions = get_captions(video_id)
             if captions is None:
                 logging.warning(f"No captions found for video {video_id}. Skipping...")
                 continue
-                
-            # Now we can safely get the length
-            logging.info(f"Captions retrieved for video {video_id}: {len(captions)} words")
             
-            # Find matches in captions
-            matches = extractor.find_matches(captions, extractor.phrases)
+            unmatched_phrases = [p for p in phrases if str(p) not in processed_phrases]
+            matches = extractor.find_matches(captions, unmatched_phrases)
+            
             if not matches:
-                logging.info(f"No matches found in video {video_id}")
+                logging.info(f"No matches found for phrases in video {video_id}")
                 continue
-                
-            # Download audio and extract clips
-            audio_path = extractor.download_audio(video_id, output_dir)
+            
+            audio_path = download_audio(video_id)
             if not audio_path:
-                logging.error(f"Failed to download audio for video {video_id}")
+                logging.warning(f"Failed to download audio for video {video_id}")
                 continue
-                
+            
             clip_paths = extractor.extract_clips(audio_path, matches, output_dir)
             
-            # Store results
-            results[video_id] = [{
-                'phrase': phrase,
-                'timestamp': str(timedelta(seconds=int(start_time))),
-                'end_time': str(timedelta(seconds=int(end_time))),
-                'context': context,
-                'clip_path': clip_path
-            } for (phrase, start_time, context, end_time), clip_path in zip(matches, clip_paths)]
-            
-            logging.info(f"Successfully processed video {video_id} with {len(matches)} matches")
-            
-            # Clean up full audio file
-            if os.path.exists(audio_path):
-                os.remove(audio_path)
-                logging.debug(f"Cleaned up audio file for video {video_id}")
-            
+            for match, clip_path in zip(matches, clip_paths):
+                phrase = match['phrase']
+                similarity = match['similarity']
+                
+                if phrase not in best_matches or similarity > best_matches[phrase]['similarity']:
+                    match['clip_path'] = clip_path
+                    best_matches[phrase] = match
+                    processed_phrases.add(str(phrase))
+                    logging.info(f"Found match for '{phrase}' with similarity {similarity:.2f}")
+                else:
+                    if os.path.exists(clip_path):
+                        os.remove(clip_path)
+                
         except Exception as e:
             logging.error(f"Error processing video {video_id}: {str(e)}")
             continue
             
+        finally:
+            if audio_path and os.path.exists(audio_path):
+                try:
+                    os.remove(audio_path)
+                except Exception as e:
+                    logging.error(f"Error removing audio file {audio_path}: {str(e)}")
+    
+    results = list(best_matches.values())
+    logging.info(f"Found best matches for {len(results)} phrases")
     return results
 
 # Example usage:
 if __name__ == "__main__":
     setup_logging()
     video_ids = ["ZM5_6js19eM", "SsKT0s5J8ko"]
-    search_phrases = ["I could fly home", 
-                      "Cause I'm going for the steel For half, half of his niggas'll take him out the picture Exercise index, won't need BowFlex Or cultivated a better class of friends Cell block and locked, I never clock it, y'all",
-                      "I remember it all", "letter from the government", "I dwell in my cell"]
+    search_phrases = ["I could fly home", "I remember it all", "letter from the government", "I dwell in my cell"]
     
     results = process_videos(video_ids, search_phrases)
     

@@ -10,11 +10,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class LyricsSplitter:
     def __init__(self, token: str):
         self.genius_api = GeniusAPI(token)
+        self.max_words = 6  # Initial maximum words per phrase
         logging.info("Initialized LyricsSplitter with provided Genius token")
     
     def split_lyrics(self, text: str) -> Tuple[int, List[str]]:
-        """Split lyrics into phrases, starting new match when phrase exceeds 6 words"""
-        logging.info(f"Splitting lyrics for text: '{text}'")
+        """Split lyrics into phrases, using current max_words setting"""
+        logging.info(f"Splitting lyrics for text: '{text}' with max_words={self.max_words}")
         
         words = text.split()
         phrases = []
@@ -23,27 +24,23 @@ class LyricsSplitter:
         while start < len(words):
             current_phrase = ""
             last_successful_end = start
-            last_successful_title = None
             
             for end in range(start, len(words)):
                 current_phrase = " ".join(words[start:end + 1])
                 current_words = current_phrase.split()
                 
-                # Start new phrase if current one exceeds 6 words
-                if len(current_words) > 6:
+                # Start new phrase if current one exceeds max_words
+                if len(current_words) > self.max_words:
                     if last_successful_end > start:
                         successful_phrase = " ".join(words[start:last_successful_end])
-                        logging.info(f"Phrase exceeded 6 words. Adding: {successful_phrase}")
+                        logging.info(f"Phrase exceeded {self.max_words} words. Adding: {successful_phrase}")
                         phrases.append(successful_phrase)
                     break
                 
                 logging.info(f"Checking if phrase exists: {current_phrase}")
                 
                 if self.genius_api.check_phrase_exists(current_phrase):
-                    # Get the title for the current phrase
-                    current_title, _ = self.get_title_and_artist(current_phrase)
                     last_successful_end = end + 1
-                    last_successful_title = current_title
                 else:
                     break
             
@@ -56,6 +53,11 @@ class LyricsSplitter:
         
         score = sum(len(phrase) for phrase in phrases)
         return score, phrases
+    
+    def reduce_chunk_size(self):
+        """Reduce the maximum number of words per phrase"""
+        self.max_words = max(1, self.max_words - 1)
+        logging.info(f"Reduced max words per phrase to {self.max_words}")
     
     def retry_search(self, phrase: str, max_retries: int = 5) -> Optional[str]:
         """
