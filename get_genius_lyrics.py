@@ -186,7 +186,7 @@ class GeniusAPI:
             return []
 
     def check_phrase_exists(self, phrase: str) -> bool:
-        """Check if a phrase exists in Genius hip-hop tracks as an exact uninterrupted quote"""
+        """Check if a phrase exists in Genius hip-hop tracks"""
         logging.info(f"Checking if phrase exists: {phrase}")
         if not phrase.strip():
             logging.warning("Empty phrase provided")
@@ -211,20 +211,10 @@ class GeniusAPI:
                 logging.info(f"Found potential match: '{title}' by {artist}")
                 
                 if result.get('lyrics_state') == 'complete':
-                    # Fetch lyrics to verify uninterrupted quote (Note: Additional API call)
-                    lyrics_url = result['url']
-                    try:
-                        lyrics_response = requests.get(lyrics_url, headers=self.headers)
-                        lyrics_response.raise_for_status()
-                        lyrics_page = lyrics_response.text
-                        # Simple verification: Check if the phrase is present in the lyrics page without breaks
-                        if f'"{phrase}"' in lyrics_page:
-                            logging.info(f"Found valid uninterrupted match in '{title}' by {artist}")
-                            return True
-                    except requests.exceptions.RequestException as e:
-                        logging.error(f"Error fetching lyrics: {e}")
+                    logging.info(f"Found valid match in '{title}' by {artist}")
+                    return True
             
-            logging.info(f"No uninterrupted matches found in {len(hits)} results from Genius")
+            logging.info(f"No matches found in {len(hits)} results from Genius")
             return False
             
         except Exception as e:

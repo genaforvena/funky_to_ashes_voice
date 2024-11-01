@@ -5,6 +5,7 @@ import logging
 import os
 import yt_dlp
 from pydub import AudioSegment
+from get_captions import get_captions
 
 
 class PhraseExtractor:
@@ -153,7 +154,6 @@ def download_audio(video_id: str, output_dir: str = 'temp') -> str:
             'outtmpl': output_template,
             'quiet': True
         }
-        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             # Download and verify file exists
             ydl.download([f"https://www.youtube.com/watch?v={video_id}"])

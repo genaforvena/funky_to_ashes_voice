@@ -4,6 +4,7 @@ import argparse
 import logging
 from get_genius_lyrics import LyricsSplitter
 from clip_processor import ClipProcessor
+from youtube_search import search_youtube_video_ids
 
 def combine_quotes_to_audio(input_text: str, genius_token: str, youtube_api_key: str, output_dir: str = 'output'):
     # Initialize components
@@ -18,50 +19,67 @@ def combine_quotes_to_audio(input_text: str, genius_token: str, youtube_api_key:
         
         print(f"Attempting split: Score {score}: {' | '.join(phrases_str)}")
         
-        # Get titles and artists
+        # Get titles and artists with improved matching
         all_titles_and_artists = []
+        unmatched_phrases = []
+        
         for phrase in phrases:
             matches = splitter.get_title_and_artist(phrase)
             if matches:
                 all_titles_and_artists.extend(matches)
                 logging.info(f"Found {len(matches)} potential matches for phrase '{phrase}'")
             else:
-                print(f"Phrase '{phrase}' not found in Genius database")
-        
-        if all_titles_and_artists:
-            # Search YouTube
-            video_ids = search_youtube_video_ids(all_titles_and_artists, youtube_api_key)
-            
-            if video_ids:
-                # Process videos with improved processor
-                results = clip_processor.process_videos(video_ids, phrases)
-                
-                if results:
-                    all_results.extend(results)
-                    matched_phrases = {result['phrase'] for result in results}
-                    remaining_phrases = [str(phrase) for phrase in phrases 
-                                      if str(phrase) not in matched_phrases]
-                    remaining_text = ' '.join(remaining_phrases)
-                    
-                    if remaining_text:
-                        print(f"Remaining text to process: {remaining_text}")
-                else:
-                    if len(phrases) > 1:
-                        splitter.reduce_chunk_size()
-                        print("No matches found, reducing chunk size and retrying...")
+                # Try breaking down the phrase into smaller segments
+                words = str(phrase).split()
+                if len(words) > 2:
+                    # Try sliding window of 2-3 words
+                    for i in range(len(words) - 1):
+                        sub_phrase = ' '.join(words[i:i+2])
+                        sub_matches = splitter.get_title_and_artist(sub_phrase)
+                        if sub_matches:
+                            all_titles_and_artists.extend(sub_matches)
+                            logging.info(f"Found {len(sub_matches)} potential matches for sub-phrase '{sub_phrase}'")
+                            break
                     else:
-                        print(f"Warning: Could not find match for: {remaining_text}")
-                        break
-            else:
-                print(f"No YouTube videos found for phrases")
-                break
-        else:
+                        unmatched_phrases.append(str(phrase))
+                else:
+                    unmatched_phrases.append(str(phrase))
+                    
+        if not all_titles_and_artists:
             if len(phrases) > 1:
                 splitter.reduce_chunk_size()
-                print("No Genius matches found, reducing chunk size and retrying...")
+                print("No matches found, reducing chunk size and retrying...")
+                continue
             else:
-                print(f"Warning: Could not find any Genius matches for: {remaining_text}")
+                print(f"Warning: Could not find any matches for: {remaining_text}")
                 break
+
+        # Search YouTube
+        video_ids = search_youtube_video_ids(all_titles_and_artists, youtube_api_key)
+        
+        if video_ids:
+            # Process videos with improved processor
+            results = clip_processor.process_videos(video_ids, phrases)
+            
+            if results:
+                all_results.extend(results)
+                matched_phrases = {result['phrase'] for result in results}
+                remaining_phrases = [phrase for phrase in unmatched_phrases 
+                                  if phrase not in matched_phrases]
+                remaining_text = ' '.join(remaining_phrases)
+                
+                if remaining_text:
+                    print(f"Remaining text to process: {remaining_text}")
+            else:
+                if len(phrases) > 1:
+                    splitter.reduce_chunk_size()
+                    print("No matches found, reducing chunk size and retrying...")
+                else:
+                    print(f"Warning: Could not find match for: {remaining_text}")
+                    break
+        else:
+            print(f"No YouTube videos found for phrases")
+            break
     
     # Sort and combine results
     if all_results:

@@ -42,9 +42,9 @@ class ClipProcessor:
             best_matches=best_matches,
             processed_phrases=processed_phrases
         )
-
         # Then process new videos
-        remaining_videos = [vid for vid in video_ids if not self.youtube_cache.is_cached(vid, 'captions')]
+        remaining_videos = [vid for vid in video_ids 
+                          if not self.youtube_cache.get_cached_data(vid, 'captions')]
         self._process_new_videos(
             video_ids=remaining_videos,
             extractor=extractor,
