@@ -16,8 +16,10 @@ class LyricsSplitter:
         logging.info("Initialized LyricsSplitter with provided Genius token")
     
     def split_lyrics(self, text: str) -> Tuple[int, List[str]]:
-        """Split lyrics into phrases, using current max_words setting"""
-        logging.info(f"Splitting lyrics for text: '{text}' with max_words={self.max_words}")
+        """Split lyrics into phrases, searching for exact uninterrupted quotes"""
+        logging.info(f"Splitting lyrics for text: '{text}' with min_phrase_length=3 and max_words={self.max_words}")
+        
+        min_phrase_length = 2  # Minimum phrase length to reduce interrupted quotes
         
         words = text.split()
         phrases = []
@@ -31,24 +33,22 @@ class LyricsSplitter:
                 current_phrase = " ".join(words[start:end + 1])
                 current_words = current_phrase.split()
                 
-                # Start new phrase if current one exceeds max_words
-                if len(current_words) > self.max_words:
+                # Start new phrase if current one exceeds max_words or meets min_phrase_length
+                if len(current_words) > self.max_words or (len(current_words) >= min_phrase_length and self.genius_api.check_phrase_exists(current_phrase)):
                     if last_successful_end > start:
                         successful_phrase = " ".join(words[start:last_successful_end])
-                        logging.info(f"Phrase exceeded {self.max_words} words. Adding: {successful_phrase}")
+                        logging.info(f"Phrase exceeded {self.max_words} words or met min_phrase_length. Adding: {successful_phrase}")
                         phrases.append(successful_phrase)
                     break
                 
-                logging.info(f"Checking if phrase exists: {current_phrase}")
+                logging.info(f"Checking if phrase exists as uninterrupted quote: {current_phrase}")
                 
                 if self.genius_api.check_phrase_exists(current_phrase):
                     last_successful_end = end + 1
-                else:
-                    break
             
             if last_successful_end > start:
                 successful_phrase = " ".join(words[start:last_successful_end])
-                logging.info(f"Found match for phrase: {successful_phrase}")
+                logging.info(f"Found match for uninterrupted quote phrase: {successful_phrase}")
                 phrases.append(successful_phrase)
             
             start = last_successful_end if last_successful_end > start else start + 1
@@ -185,6 +185,51 @@ class GeniusAPI:
             logging.error(f"Unexpected Error: {e}")
             return []
 
+    def check_phrase_exists(self, phrase: str) -> bool:
+        """Check if a phrase exists in Genius hip-hop tracks as an exact uninterrupted quote"""
+        logging.info(f"Checking if phrase exists: {phrase}")
+        if not phrase.strip():
+            logging.warning("Empty phrase provided")
+            return False
+        
+        search_url = f"{self.base_url}/search"
+        params = {
+            'q': f'"{phrase}"',  # Wrap phrase in quotes for exact match
+            'per_page': 20  # Get more results to try
+        }
+        
+        try:
+            response = requests.get(search_url, headers=self.headers, params=params)
+            response.raise_for_status()
+            
+            hits = response.json().get('response', {}).get('hits', [])
+            
+            for hit in hits:
+                result = hit['result']
+                title = result.get('title', 'Unknown')
+                artist = result.get('primary_artist', {}).get('name', 'Unknown')
+                logging.info(f"Found potential match: '{title}' by {artist}")
+                
+                if result.get('lyrics_state') == 'complete':
+                    # Fetch lyrics to verify uninterrupted quote (Note: Additional API call)
+                    lyrics_url = result['url']
+                    try:
+                        lyrics_response = requests.get(lyrics_url, headers=self.headers)
+                        lyrics_response.raise_for_status()
+                        lyrics_page = lyrics_response.text
+                        # Simple verification: Check if the phrase is present in the lyrics page without breaks
+                        if f'"{phrase}"' in lyrics_page:
+                            logging.info(f"Found valid uninterrupted match in '{title}' by {artist}")
+                            return True
+                    except requests.exceptions.RequestException as e:
+                        logging.error(f"Error fetching lyrics: {e}")
+            
+            logging.info(f"No uninterrupted matches found in {len(hits)} results from Genius")
+            return False
+            
+        except Exception as e:
+            logging.error(f"API Error: {e}")
+            return False
 # Export the class
 __all__ = ['GeniusAPI']
 
@@ -193,23 +238,21 @@ def example_usage():
     splitter = LyricsSplitter(genius_token)
     
     examples = [
-        "the future is now",
-        "the future is now today",
         "Cause I'm going for the steel For half, half of his niggas'll take him out the picture Exercise index, won't need BowFlex Or cultivated a better class of friends Cell block and locked, I never clock it, y'all"
     ]
     
     for text in examples:
         logging.info(f"Processing example text: '{text}'")
         score, phrases = splitter.split_lyrics(text)
-        logging.info(f"Best split: Score {score}: {' | '.join(phrases)}")
+        logging.info(f"Best split for exact uninterrupted quotes: Score {score}: {' | '.join(phrases)}")
         
         for phrase in phrases:
             title_artist = splitter.get_title_and_artist(phrase)
             if title_artist:
                 title, artist = title_artist
-                logging.info(f"Phrase '{phrase}' found in '{title}' by {artist}")
+                logging.info(f"Uninterrupted quote phrase '{phrase}' found in '{title}' by {artist}")
             else:
-                logging.warning(f"Phrase '{phrase}' not found in Genius database")
+                logging.warning(f"Uninterrupted quote phrase '{phrase}' not found in Genius database")
 
 if __name__ == "__main__":
     example_usage()
