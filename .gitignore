@@ -8,6 +8,11 @@ word_samples/
 output/
 temp/
 cache/
+.genaiscript/
+.vscode/
+
+*.vtt
+*.mp3
 
 # C extensions
 *.so
