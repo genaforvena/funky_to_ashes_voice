@@ -1,5 +1,6 @@
 import re
 import os
+import sys
 import time
 import lyricsgenius
 import yt_dlp
@@ -108,17 +109,22 @@ def transcribe_audio_groq(audio_path):
     client = Groq()
     filename = audio_path  # Path to your audio file
 
-    with open(filename, "rb") as file:
-        transcription = client.audio.transcriptions.create(
+    print(f"Transcribing audio file: {filename}")
+    try:
+        with open(filename, "rb") as file:
+            transcription = client.audio.transcriptions.create(
             file=(filename, file.read()),
             model="whisper-large-v3-turbo",
-            response_format="verbose_json",
-        )
+                response_format="verbose_json",
+            )
+    except Exception as e:
+        print(f"An error occurred during transcription with Groq: {e}", file=sys.stderr)
+        return None, []
     
     # Process the transcription result
-    transcription_text = transcription['text']
+    transcription_text = transcription.text
     segments = []
-    for segment in transcription['segments']:
+    for segment in transcription.segments:
         text = segment['text'].strip().lower()
         start_ms = int(float(segment['start']) * 1000)
         end_ms = int(float(segment['end']) * 1000)
