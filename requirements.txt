@@ -1,12 +1,4 @@
-torch>=2.0.0
-torchaudio>=2.0.0
-transformers>=4.30.0
-pydub>=0.25.1
-numpy>=1.21.0
-librosa>=0.10.0
-scipy>=1.7.0
-soundfile>=0.12.1
-ffmpeg-python>=0.2.0
-requests>=2.25.1
-google-api-python-client>=2.0.0
+lyricsgenius>=3.0.0
 yt-dlp>=2021.12.1
+groq>=1.0.0
+pydub>=0.25.1
