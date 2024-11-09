@@ -1,4 +1,6 @@
 import re
+import json
+import hashlib
 import os
 import sys
 import time
@@ -162,27 +164,46 @@ def tokenize_input_text(input_text):
     tokens = re.findall(r'\b\w+\b', input_text.lower())
     return set(tokens)
 
+
 def transcribe_audio_with_word_timestamps(audio_path):
     client = Groq()
 
-    with open(audio_path, "rb") as file:
-        transcription = client.audio.transcriptions.create(
-            file=(audio_path, file.read()),
-            model="whisper-large-v3-turbo",
-            response_format="verbose_json",
-        )
+    # Create a cache filename based on the audio file name
+    cache_filename = os.path.splitext(audio_path)[0] + '_transcription.json'
 
-    # Extract word-level timestamps
-    words = []
+    # Check if the cache file exists
+    if os.path.exists(cache_filename):
+        print(f"Loading cached transcription for '{audio_path}'")
+        with open(cache_filename, 'r', encoding='utf-8') as cache_file:
+            transcription_words = json.load(cache_file)
+        return transcription_words
+
+    print(f"Transcribing audio file: {audio_path}")
+    with open(audio_path, "rb") as file:
+        try:
+            transcription = client.audio.transcriptions.create(
+                file=(audio_path, file.read()),
+                model="whisper-large-v3-turbo",
+                response_format="verbose_json",
+            )
+        except Exception as e:
+            print(f"An error occurred during transcription with Groq: {e}", file=sys.stderr)
+            return []
+
+    # Process the transcription result
+    transcription_words = []
     for segment in transcription.segments:
-        print(segment)
-        words.append({
+        transcription_words.append({
             'word': segment['text'].strip().lower(),
             'start': float(segment['start']),
             'end': float(segment['end'])
         })
 
-    return words
+    # Save the transcription to the cache file
+    with open(cache_filename, 'w', encoding='utf-8') as cache_file:
+        json.dump(transcription_words, cache_file, ensure_ascii=False, indent=2)
+
+    return transcription_words
 
 def extract_audio_segments_by_words(audio_path, matching_segments):
     from pydub import AudioSegment
@@ -245,10 +266,83 @@ def find_matching_word_segments(input_phrases, transcription_words):
                 })
     return matching_segments
 
+
+CACHE_DIR = 'cache'
+
+def get_file_checksum(file_path):
+    md5_hash = hashlib.md5()
+    with open(file_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            md5_hash.update(byte_block)
+    return md5_hash.hexdigest()
+
+def transcribe_audio_with_word_timestamps(audio_path):
+    client = Groq()
+
+    if not os.path.exists(CACHE_DIR):
+        os.makedirs(CACHE_DIR)
+
+    # Use the file checksum for the cache filename
+    checksum = get_file_checksum(audio_path)
+    cache_filename = os.path.join(CACHE_DIR, f"{checksum}_transcription.json")
+
+    # Check if the cache file exists
+    if os.path.exists(cache_filename):
+        print(f"Loading cached transcription for '{audio_path}'")
+        with open(cache_filename, 'r', encoding='utf-8') as cache_file:
+            transcription_words = json.load(cache_file)
+        return transcription_words
+
+    print(f"Transcribing audio file: {audio_path}")
+    with open(audio_path, "rb") as file:
+        try:
+            transcription = client.audio.transcriptions.create(
+                file=(audio_path, file.read()),
+                model="whisper-large-v3-turbo",
+                response_format="verbose_json",
+            )
+        except Exception as e:
+            print(f"An error occurred during transcription with Groq: {e}", file=sys.stderr)
+            return []
+
+    # Process the transcription result
+    transcription_words = []
+    for segment in transcription.segments:
+        transcription_words.append({
+            'word': segment['text'].strip().lower(),
+            'start': float(segment['start']),
+            'end': float(segment['end'])
+        })
+
+    # Save the transcription to the cache file
+    with open(cache_filename, 'w', encoding='utf-8') as cache_file:
+        json.dump(transcription_words, cache_file, ensure_ascii=False, indent=2)
+
+    return transcription_words
+
+def extract_audio_segments_by_phrases(audio_path, matching_segments):
+    from pydub import AudioSegment
+
+    audio = AudioSegment.from_file(audio_path)
+    output_audio = AudioSegment.silent(duration=0)
+    crossfade_duration = 50  # milliseconds
+
+    for i, segment in enumerate(matching_segments):
+        start_ms = segment['start']
+        end_ms = segment['end']
+        audio_segment = audio[start_ms:end_ms]
+
+        if i > 0:
+            output_audio = output_audio.append(audio_segment, crossfade=crossfade_duration)
+        else:
+            output_audio += audio_segment
+
+    return output_audio
+
 def generate_audio_from_input(input_text):
-    # Step 1: Tokenize input text
-    input_words = tokenize_input_text(input_text)
-    print(f"Input words: {input_words}")
+    # Step 1: Tokenize input text into phrases
+    input_phrases = input_text.lower().split(' and ')
+    print(f"Input phrases: {input_phrases}")
 
     # Step 2: Find matches for the phrases in the input text
     matches = find_longest_phrase_matches(input_text)
@@ -275,7 +369,6 @@ def generate_audio_from_input(input_text):
             # Check if the audio file already exists
             if os.path.exists(audio_file):
                 print(f"Audio file '{audio_file}' already exists. Skipping download.")
-                # Proceed to transcription
             else:
                 # Download audio
                 audio_file = download_audio(youtube_url, audio_file)
@@ -283,23 +376,21 @@ def generate_audio_from_input(input_text):
                     print(f"Failed to download audio for '{title}' by '{artist}'.")
                     continue
 
-            # Transcribe audio with word-level timestamps
+            # Transcribe audio with word-level timestamps (with caching)
             try:
                 transcription_words = transcribe_audio_with_word_timestamps(audio_file)
             except Exception as e:
                 print(f"An error occurred during transcription: {e}")
                 continue
 
-            print(f"Transcription words: {transcription_words}")
-            # Find matching word segments
-            matching_segments = find_matching_word_segments(input_words, transcription_words)
+            # Find matching phrases in the transcription
+            matching_segments = find_matching_word_segments(input_phrases, transcription_words)
             if not matching_segments:
-                print(f"No matching words found in the transcription of '{title}' by '{artist}'.")
+                print(f"No matching phrases found in the transcription of '{title}' by '{artist}'.")
                 continue
 
-            print(f"Matching segments: {matching_segments}")
             # Extract and concatenate audio segments
-            song_audio = extract_audio_segments_by_words(audio_file, matching_segments)
+            song_audio = extract_audio_segments_by_phrases(audio_file, matching_segments)
             final_audio += song_audio
         else:
             print(f"No suitable YouTube video found for '{title}' by '{artist}'.")
@@ -314,5 +405,5 @@ def generate_audio_from_input(input_text):
     print(f"\nGenerated audio saved as '{output_filename}'")
 
 if __name__ == "__main__":
-    user_input = "we gon be alright and we gon be together"
+    user_input = "Be like a black hole laughing—always there, pulling everything in, but never giving yourself away."
     generate_audio_from_input(user_input)
