@@ -1,112 +1,124 @@
 # Hip-Hop Voice Sampler
 
-A Python tool that extracts individual words from hip-hop songs using AI transcription, creating a personal "speech synthesizer" that talks using actual rap samples. Think of it as creating your own vocabulary of words spoken by your favorite artists.
+## Features
+- **Phrase Matching**: Identifies songs whose lyrics match phrases in the input text using the Genius API.
+- **Audio Downloading**: Searches for and downloads audio from YouTube using `yt-dlp`.
+- **Transcription**: Transcribes audio using the Groq client for word-level timestamps.
+- **Audio Processing**: Extracts and assembles audio segments corresponding to matching words using `pydub`.
+- **Output Generation**: Creates a final audio file (`final_output.mp3`) containing the stitched audio segments.
 
-## 🎯 Project Goal
+## Prerequisites
+- Python 3.7 or higher
+- **Genius API Key**: Obtain from [Genius API](https://genius.com/api-clients).
+- **Groq API Access**: Access to the Groq transcription service (contact Groq for API details).
+- **FFmpeg**: Required by `yt-dlp` and `pydub` for audio processing.
 
-Create a text-to-speech system that:
-1. Takes a hip-hop song and its lyrics as input
-2. Cuts out individual words using AI transcription for timing
-3. Creates a database of word samples that can be used to "speak" new sentences using the artist's voice
+## Installation
 
-## 🚀 Quick Start
-
+### 1. Clone the Repository
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/hip-hop-voice-sampler.git
-cd hip-hop-voice-sampler
+git clone https://github.com/yourusername/audio-phrase-stitcher.git
+cd audio-phrase-stitcher
+```
 
-# Create virtual environment
+### 2. Set Up a Virtual Environment (Optional but Recommended)
+```bash
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run the sampler
-python sampler.py --audio song.mp3 --lyrics lyrics.txt --output samples/
+source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
 ```
 
-## 📋 Requirements
+   ### 3. Install Required Python Packages
+   Install the required packages using `pip`:
+   ```bash
+   pip install -r requirements.txt
+   ```
+   If a `requirements.txt` file is not provided, install the packages individually:
+   ```bash
+   pip install lyricsgenius yt-dlp groq pydub
+   ```
 
-- Python 3.8+
-- FFmpeg (for audio processing)
-- GPU recommended but not required
+   ### 4. Install FFmpeg
+   - For Windows:
+     - Download FFmpeg from [FFmpeg Windows Builds](https://ffmpeg.org/download.html).
+     - Add the `bin` directory of FFmpeg to your system's PATH environment variable.
+   - For macOS (using Homebrew):
+     ```bash
+     brew install ffmpeg
+     ```
+   - For Linux (Debian/Ubuntu):
+     ```bash
+     sudo apt-get install ffmpeg
+     ```
 
-Required Python packages (see requirements.txt):
-```
-torch
-torchaudio
-transformers
-pydub
-numpy
-librosa
-```
+   ## Configuration
 
-## 🎵 Usage
+   ### 1. Set Environment Variables
+   **Genius API Key**
+   ```bash
+   export GENIUS_TOKEN='your_genius_api_key'
+   ```
+   On Windows Command Prompt:
+   ```cmd
+   set GENIUS_TOKEN=your_genius_api_key
+   ```
 
-1. Prepare your input files:
-   - An MP3 file of the song
-   - A text file with the lyrics
+   **Groq API Key**
+   If the Groq client requires an API key:
+   ```bash
+   export GROQ_API_KEY='your_groq_api_key'
+   ```
+   On Windows Command Prompt:
+   ```cmd
+   set GROQ_API_KEY=your_groq_api_key
+   ```
 
-2. Run the sampler:
-```python
-from hip_hop_sampler import LLMWordSampler
+   ### 2. Verify FFmpeg Installation
+   ```bash
+   ffmpeg -version
+   ```
 
-sampler = LLMWordSampler(
-    audio_path="your_song.mp3",
-    lyrics_path="your_lyrics.txt",
-    output_dir="samples"
-)
-sampler.process()
-```
+   ## Usage
 
-3. Find your samples in the output directory:
-   - Individual MP3 files for each word
-   - metadata.json with timing information
+   ### 1. Run the Script
+   ```bash
+   python script_name.py
+   ```
+   Replace `script_name.py` with the actual filename.
 
-## 🛠 How It Works
+   ### 2. Provide Input Text
+   By default, the script uses:
+   ```python
+   user_input = "we gon be alright and we gon be together"
+   ```
+   To use custom input, modify this line or adapt the script to accept command-line arguments or user input.
 
-1. **Transcription**: Uses Whisper ASR model to transcribe the audio and get word timestamps
-2. **Matching**: Matches transcribed words with provided lyrics
-3. **Extraction**: Cuts out word samples with a small padding to preserve natural sound
-4. **Storage**: Saves individual words as MP3 files with metadata
+   ### 3. Output
+   The final audio file `final_output.mp3` will be saved in the current directory.
 
-## 📂 Project Structure
+   ## How It Works
+   1. **Tokenization**: The input text is tokenized into words.
+   2. **Phrase Matching**: Searches for the longest phrases in the input text that match song lyrics using the Genius API.
+   3. **YouTube Search and Download**: For each matched song, searches YouTube and downloads the audio using `yt-dlp`.
+   4. **Transcription**: Transcribes the audio using the Groq client to obtain word-level timestamps.
+   5. **Matching Word Segments**: Identifies timestamps of matching words in the transcription.
+   6. **Audio Extraction and Assembly**: Extracts the corresponding audio segments and assembles them using `pydub`.
+   7. **Output Generation**: The final audio is exported as `final_output.mp3`.
 
-```
-hip-hop-voice-sampler/
-├── sampler/
-│   ├── __init__.py
-│   ├── transcriber.py    # ASR and word timing
-│   ├── extractor.py      # Audio extraction
-│   └── utils.py          # Helper functions
-├── examples/             # Example scripts
-├── tests/               # Test files
-├── requirements.txt     # Dependencies
-├── setup.py            # Package setup
-└── README.md           # This file
-```
+   ## Troubleshooting
+   - **Genius API Errors**: Ensure your Genius API key is correct and you haven't exceeded rate limits.
+   - **YouTube Download Issues**: Check your internet connection and update `yt-dlp` if necessary:
+     ```bash
+     pip install -U yt-dlp
+     ```
+   - **Transcription Errors**: Verify your Groq API key and ensure you have access to the required transcription models.
+   - **FFmpeg Not Found**: Make sure FFmpeg is installed and added to your system's PATH.
+   - **Module Import Errors**: Ensure all dependencies are installed in your Python environment.
 
-## ⚠️ Limitations
-
-- Works best with clear vocal tracks
-- ASR may struggle with very fast rap sections
-- Background music affects sample quality
-- No cleaning/isolation of vocals from music
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## 📝 TODO
-
-- [ ] Add vocal isolation option
-- [ ] Improve word boundary detection
-- [ ] Add a simple GUI
-- [ ] Create a word sample database format
-- [ ] Add playback functionality
-
-## 📄 License
-
-MIT License - see LICENSE file for details
+   ## Dependencies
+   - `lyricsgenius`: For accessing the Genius API.
+   - `yt-dlp`: For downloading audio from YouTube.
+   - `groq`: For audio transcription services.
+   - `pydub`: For audio manipulation.
+   - **FFmpeg**: Required by `pydub` and `yt-dlp` for processing audio files.
+   
+`

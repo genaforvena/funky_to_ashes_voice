@@ -203,14 +203,46 @@ def extract_audio_segments_by_words(audio_path, matching_segments):
 
     return output_audio
 
-def find_matching_word_segments(input_words, transcription_words):
-    matching_segments = []
+def find_matching_word_segments(input_phrases, transcription_words):
+    # Concatenate transcription text and keep track of positions
+    full_text = ''
+    positions = []  # List of tuples (start_time, end_time, text)
     for word_info in transcription_words:
-        if word_info['word'] in input_words:
-            matching_segments.append({
-                'start': int(word_info['start'] * 1000),
-                'end': int(word_info['end'] * 1000)
-            })
+        start_time = int(word_info['start'] * 1000)
+        end_time = int(word_info['end'] * 1000)
+        text = word_info['word']
+        full_text += text + ' '
+        positions.append({
+            'start': start_time,
+            'end': end_time,
+            'text': text
+        })
+    full_text = full_text.strip().lower()
+    
+    matching_segments = []
+    for phrase in input_phrases:
+        phrase_lower = phrase.lower()
+        index = full_text.find(phrase_lower)
+        if index != -1:
+            # Find corresponding timestamps
+            accumulated_length = 0
+            segment_start = None
+            segment_end = None
+            for pos in positions:
+                text = pos['text'].lower()
+                text_length = len(text) + 1  # +1 for the space added during concatenation
+                if accumulated_length <= index < accumulated_length + text_length:
+                    segment_start = pos['start']
+                if accumulated_length < index + len(phrase_lower) <= accumulated_length + text_length:
+                    segment_end = pos['end']
+                    break
+                accumulated_length += text_length
+            if segment_start is not None and segment_end is not None:
+                matching_segments.append({
+                    'phrase': phrase,
+                    'start': segment_start,
+                    'end': segment_end
+                })
     return matching_segments
 
 def generate_audio_from_input(input_text):
@@ -258,12 +290,14 @@ def generate_audio_from_input(input_text):
                 print(f"An error occurred during transcription: {e}")
                 continue
 
+            print(f"Transcription words: {transcription_words}")
             # Find matching word segments
             matching_segments = find_matching_word_segments(input_words, transcription_words)
             if not matching_segments:
                 print(f"No matching words found in the transcription of '{title}' by '{artist}'.")
                 continue
 
+            print(f"Matching segments: {matching_segments}")
             # Extract and concatenate audio segments
             song_audio = extract_audio_segments_by_words(audio_file, matching_segments)
             final_audio += song_audio
