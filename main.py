@@ -156,77 +156,114 @@ def assemble_audio_segments(audio_path, phrase_segments, phrase_order):
 
     return output_audio
 
+def tokenize_input_text(input_text):
+    import re
+    # Remove punctuation and convert to lowercase
+    tokens = re.findall(r'\b\w+\b', input_text.lower())
+    return set(tokens)
+
+def transcribe_audio_with_word_timestamps(audio_path):
+    client = Groq(api_key='your_api_key')  # Include your API key
+
+    with open(audio_path, "rb") as file:
+        transcription = client.audio.transcriptions.create(
+            file=(audio_path, file.read()),
+            model="whisper-large-v3-turbo",
+            response_format="verbose_json",
+        )
+
+    # Extract word-level timestamps
+    words = []
+    for segment in transcription.segments:
+        for word_info in segment.words:
+            words.append({
+                'word': word_info.word.strip().lower(),
+                'start': float(word_info.start),
+                'end': float(word_info.end)
+            })
+
+    return words
+
+def extract_audio_segments_by_words(audio_path, matching_segments):
+    from pydub import AudioSegment
+
+    audio = AudioSegment.from_file(audio_path)
+    output_audio = AudioSegment.silent(duration=0)
+    crossfade_duration = 50  # milliseconds
+
+    for i, segment in enumerate(matching_segments):
+        start_ms = segment['start']
+        end_ms = segment['end']
+        audio_segment = audio[start_ms:end_ms]
+
+        if i > 0:
+            output_audio = output_audio.append(audio_segment, crossfade=crossfade_duration)
+        else:
+            output_audio += audio_segment
+
+    return output_audio
+
+def find_matching_word_segments(input_words, transcription_words):
+    matching_segments = []
+    for word_info in transcription_words:
+        if word_info['word'] in input_words:
+            matching_segments.append({
+                'start': int(word_info['start'] * 1000),
+                'end': int(word_info['end'] * 1000)
+            })
+    return matching_segments
+
 def generate_audio_from_input(input_text):
-    # Step 1: Find matches for the phrases in the input text
+    # Step 1: Tokenize input text
+    input_words = tokenize_input_text(input_text)
+    print(f"Input words: {input_words}")
+
+    # Step 2: Find matches for the phrases in the input text
     matches = find_longest_phrase_matches(input_text)
     if not matches:
         print("No matches found in Genius.")
         return
 
-    print("Matches found:")
-    for match in matches:
-        print(f"- Phrase: '{match['phrase']}', Song: '{match['title']}' by '{match['artist']}'")
+    # Collect unique songs to process
+    unique_songs = {(match['title'], match['artist']) for match in matches}
 
-    # Collect phrases in order
-    phrases = [match['phrase'] for match in matches]
-    phrase_order = phrases.copy()
-
-    # Step 2: For each unique song, download and process audio
-    songs_processed = {}
-
-    for match in matches:
-        song_key = f"{match['title']} - {match['artist']}"
-        if song_key in songs_processed:
-            continue  # Skip if already processed
-
-        print(f"\nProcessing song '{match['title']}' by '{match['artist']}'...")
-        youtube_url = search_youtube_video(match['title'], match['artist'])
+    # Step 3: Process each song
+    final_audio = AudioSegment.silent(duration=0)
+    for title, artist in unique_songs:
+        print(f"\nProcessing song '{title}' by '{artist}'...")
+        youtube_url = search_youtube_video(title, artist)
         if youtube_url:
             print(f"Found YouTube video: {youtube_url}")
 
             # Sanitize the filename
+            song_key = f"{title} - {artist}"
             safe_song_key = sanitize_filename(song_key)
             audio_file = f"{safe_song_key}.mp3"
 
+            # Download audio
             audio_file = download_audio(youtube_url, audio_file)
             if audio_file is None or not os.path.exists(audio_file):
-                print(f"Failed to download audio for '{match['title']}' by '{match['artist']}'.")
+                print(f"Failed to download audio for '{title}' by '{artist}'.")
                 continue
 
-            # Transcribe audio using Groq
+            # Transcribe audio with word-level timestamps
             try:
-                transcription_text, segments = transcribe_audio_groq(audio_file)
+                transcription_words = transcribe_audio_with_word_timestamps(audio_file)
             except Exception as e:
-                print(f"An error occurred during transcription with Groq: {e}")
+                print(f"An error occurred during transcription: {e}")
                 continue
 
-            # Find phrases in transcription
-            song_phrases = [m['phrase'] for m in matches if m['title'] == match['title'] and m['artist'] == match['artist']]
-            phrase_segments = find_phrases_in_transcription(song_phrases, segments)
+            # Find matching word segments
+            matching_segments = find_matching_word_segments(input_words, transcription_words)
+            if not matching_segments:
+                print(f"No matching words found in the transcription of '{title}' by '{artist}'.")
+                continue
 
-            songs_processed[song_key] = {
-                'audio_file': audio_file,
-                'phrase_segments': phrase_segments
-            }
+            # Extract and concatenate audio segments
+            song_audio = extract_audio_segments_by_words(audio_file, matching_segments)
+            final_audio += song_audio
         else:
-            print(f"No suitable YouTube video found for '{match['title']}' by '{match['artist']}'.")
-
-    # Step 3: Assemble the final audio
-    final_audio = AudioSegment.silent(duration=0)
-    for phrase in phrase_order:
-        found = False
-        for song_key, data in songs_processed.items():
-            if phrase in data['phrase_segments']:
-                audio_segment = assemble_audio_segments(
-                    data['audio_file'],
-                    {phrase: data['phrase_segments'][phrase]},
-                    [phrase]
-                )
-                final_audio += audio_segment
-                found = True
-                break
-        if not found:
-            print(f"Phrase '{phrase}' could not be assembled.")
+            print(f"No suitable YouTube video found for '{title}' by '{artist}'.")
 
     if len(final_audio) == 0:
         print("Failed to generate audio from the provided input.")
