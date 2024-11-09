@@ -114,7 +114,7 @@ def transcribe_audio_groq(audio_path):
         with open(filename, "rb") as file:
             transcription = client.audio.transcriptions.create(
             file=(filename, file.read()),
-            model="whisper-large-v3-turbo",
+            model="distil-whisper-large-v3-en",
                 response_format="verbose_json",
             )
     except Exception as e:
