@@ -163,7 +163,7 @@ def tokenize_input_text(input_text):
     return set(tokens)
 
 def transcribe_audio_with_word_timestamps(audio_path):
-    client = Groq(api_key='your_api_key')  # Include your API key
+    client = Groq()
 
     with open(audio_path, "rb") as file:
         transcription = client.audio.transcriptions.create(
