@@ -175,12 +175,12 @@ def transcribe_audio_with_word_timestamps(audio_path):
     # Extract word-level timestamps
     words = []
     for segment in transcription.segments:
-        for word_info in segment.words:
-            words.append({
-                'word': word_info.word.strip().lower(),
-                'start': float(word_info.start),
-                'end': float(word_info.end)
-            })
+        print(segment)
+        words.append({
+            'word': segment['text'].strip().lower(),
+            'start': float(segment['start']),
+            'end': float(segment['end'])
+        })
 
     return words
 
@@ -240,11 +240,16 @@ def generate_audio_from_input(input_text):
             safe_song_key = sanitize_filename(song_key)
             audio_file = f"{safe_song_key}.mp3"
 
-            # Download audio
-            audio_file = download_audio(youtube_url, audio_file)
-            if audio_file is None or not os.path.exists(audio_file):
-                print(f"Failed to download audio for '{title}' by '{artist}'.")
-                continue
+            # Check if the audio file already exists
+            if os.path.exists(audio_file):
+                print(f"Audio file '{audio_file}' already exists. Skipping download.")
+                # Proceed to transcription
+            else:
+                # Download audio
+                audio_file = download_audio(youtube_url, audio_file)
+                if audio_file is None or not os.path.exists(audio_file):
+                    print(f"Failed to download audio for '{title}' by '{artist}'.")
+                    continue
 
             # Transcribe audio with word-level timestamps
             try:
