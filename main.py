@@ -3,49 +3,11 @@ import json
 import hashlib
 import os
 import sys
-import time
-import lyricsgenius
 import yt_dlp
 from groq import Groq
 from pydub import AudioSegment
+from quotes_extractor import find_longest_phrase_matches
 
-# Initialize Genius API
-GENIUS_API_KEY = os.getenv("GENIUS_TOKEN")
-genius = lyricsgenius.Genius(GENIUS_API_KEY, timeout=15)
-
-def find_longest_phrase_matches(input_text):
-    words = input_text.split()
-    matches = []
-    cache = {}
-
-    # Generate all possible phrases, starting with the longest
-    for length in range(len(words), 0, -1):
-        for start in range(len(words) - length + 1):
-            end = start + length
-            phrase = " ".join(words[start:end])
-
-            if phrase in cache:
-                continue  # Skip if already searched
-            cache[phrase] = True
-
-            try:
-                song = genius.search_song(phrase)
-                if song:
-                    matches.append({
-                        'phrase': phrase,
-                        'title': song.title,
-                        'artist': song.artist,
-                        'url': song.url,
-                        'start_index': start,
-                        'end_index': end
-                    })
-            except Exception as e:
-                print(f"An error occurred while searching for '{phrase}': {e}")
-            time.sleep(1)  # Delay to prevent rate limiting
-
-    # Sort matches by their position in the input text
-    matches.sort(key=lambda x: x['start_index'])
-    return matches
 
 def search_youtube_video(title, artist):
     query = f"{title} {artist}"
@@ -405,5 +367,5 @@ def generate_audio_from_input(input_text):
     print(f"\nGenerated audio saved as '{output_filename}'")
 
 if __name__ == "__main__":
-    user_input = "Be like a black hole laughing—always there, pulling everything in, but never giving yourself away."
+    user_input = "Be like a black hole never giving yourself away."
     generate_audio_from_input(user_input)
