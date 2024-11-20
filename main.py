@@ -1,73 +1,12 @@
-import re
 import json
 import hashlib
 import os
 import sys
-import yt_dlp
 from groq import Groq
 from pydub import AudioSegment
 from quotes_extractor import find_longest_phrase_matches
+from audio_downloader import search_youtube_video, download_audio, sanitize_filename
 
-
-def search_youtube_video(title, artist):
-    query = f"{title} {artist}"
-    ydl_opts = {
-        'quiet': True,
-        'skip_download': True,
-        'ignoreerrors': True,
-        'no_warnings': True,
-        # Remove or comment out the 'extract_flat' option
-        # 'extract_flat': 'in_playlist',
-    }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        search_url = f"ytsearch5:{query}"  # Search for top 5 results
-        info = ydl.extract_info(search_url, download=False)
-        if 'entries' not in info or not info['entries']:
-            print("No videos found on YouTube for this song.")
-            return None
-
-        videos = info['entries']
-        for video in videos:
-            if video is None:
-                continue
-            # Now 'webpage_url' should be available
-            return video['webpage_url']
-
-    print("No suitable YouTube video found.")
-    return None
-
-
-def sanitize_filename(name):
-    # Remove invalid characters for filenames
-    return re.sub(r'[\\/*?:"<>|]', "", name)
-
-
-def download_audio(youtube_url, output_audio):
-    output_audio = sanitize_filename(output_audio)
-    # Remove the .mp3 extension if present
-    if output_audio.lower().endswith('.mp3'):
-        output_audio = output_audio[:-4]
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': output_audio,  # No .mp3 extension here
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'quiet': False,  # Set to False to see output for debugging
-        'no_warnings': True,
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([youtube_url])
-        # After download, append .mp3 to the filename
-        output_audio += '.mp3'
-        return output_audio
-    except Exception as e:
-        print(f"An error occurred during audio download: {e}")
-        return None
 
 def transcribe_audio_groq(audio_path):
     client = Groq()
@@ -96,6 +35,7 @@ def transcribe_audio_groq(audio_path):
 
     return transcription_text, segments
 
+
 def find_phrases_in_transcription(phrases, timestamps):
     phrase_segments = {}
     for phrase in phrases:
@@ -105,6 +45,7 @@ def find_phrases_in_transcription(phrases, timestamps):
                 if phrase not in phrase_segments or start < phrase_segments[phrase]['start']:
                     phrase_segments[phrase] = {'start': start, 'end': end}
     return phrase_segments
+
 
 def assemble_audio_segments(audio_path, phrase_segments, phrase_order):
     audio = AudioSegment.from_file(audio_path)
@@ -119,6 +60,7 @@ def assemble_audio_segments(audio_path, phrase_segments, phrase_order):
             print(f"Phrase '{phrase}' not found in transcription.")
 
     return output_audio
+
 
 def tokenize_input_text(input_text):
     import re
@@ -166,6 +108,7 @@ def transcribe_audio_with_word_timestamps(audio_path):
         json.dump(transcription_words, cache_file, ensure_ascii=False, indent=2)
 
     return transcription_words
+
 
 def extract_audio_segments_by_words(audio_path, matching_segments):
     from pydub import AudioSegment
