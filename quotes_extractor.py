@@ -1,10 +1,26 @@
 import lyricsgenius
 import time
 import os
+import sys
 
+# Get the Genius API token from environment variables
 GENIUS_API_TOKEN = os.getenv("GENIUS_TOKEN")
 
 def find_longest_phrase_matches(input_text):
+    """
+    Find the longest phrases in the input text that match song lyrics using the Genius API.
+    
+    Args:
+        input_text (str): The input text to search for in song lyrics
+        
+    Returns:
+        list: List of tuples (phrase, song_info_list) where song_info_list is a list of 
+              dictionaries with title, artist, and url
+    """
+    if not GENIUS_API_TOKEN:
+        print("Error: GENIUS_TOKEN environment variable is not set.", file=sys.stderr)
+        return []
+        
     words = input_text.split()
     matches = []
     cache = {}
@@ -55,7 +71,7 @@ def find_longest_phrase_matches(input_text):
                     # Append the exact matched phrase and its song info
                     matches.append((phrase, song_info_list))
             except Exception as e:
-                print(f"An error occurred while searching for '{phrase}': {e}")
+                print(f"An error occurred while searching for '{phrase}': {e}", file=sys.stderr)
             time.sleep(1)  # Delay to prevent rate limiting
 
     # Sort matches by the length of the phrase, from longest to shortest

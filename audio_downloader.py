@@ -1,8 +1,19 @@
 import re
 import yt_dlp
+import sys
 
 
 def search_youtube_video(title, artist):
+    """
+    Search YouTube for a video matching the given song title and artist.
+    
+    Args:
+        title (str): The song title to search for
+        artist (str): The artist name to search for
+        
+    Returns:
+        str: URL of the matching YouTube video, or None if no match is found
+    """
     query = f"{title} {artist}"
     ydl_opts = {
         'quiet': True,
@@ -16,7 +27,7 @@ def search_youtube_video(title, artist):
         try:
             info = ydl.extract_info(search_url, download=False)
         except Exception as e:
-            print(f"An error occurred during YouTube search: {e}")
+            print(f"An error occurred during YouTube search: {e}", file=sys.stderr)
             return None
 
         if 'entries' not in info or not info['entries']:
@@ -36,11 +47,30 @@ def search_youtube_video(title, artist):
 
 
 def sanitize_filename(name):
+    """
+    Remove invalid characters from a filename.
+    
+    Args:
+        name (str): The filename to sanitize
+        
+    Returns:
+        str: The sanitized filename
+    """
     # Remove invalid characters for filenames
     return re.sub(r'[\\/*?:"<>|]', "", name)
 
 
 def download_audio(youtube_url, output_audio):
+    """
+    Download audio from a YouTube URL.
+    
+    Args:
+        youtube_url (str): The YouTube URL to download from
+        output_audio (str): The desired output filename
+        
+    Returns:
+        str: Path to the downloaded audio file, or None if download failed
+    """
     output_audio = sanitize_filename(output_audio)
     # Remove the .mp3 extension if present
     if output_audio.lower().endswith('.mp3'):
@@ -62,7 +92,7 @@ def download_audio(youtube_url, output_audio):
         output_file = output_audio + '.mp3'
         return output_file
     except Exception as e:
-        print(f"An error occurred during audio download: {e}")
+        print(f"An error occurred during audio download: {e}", file=sys.stderr)
         return None
 
 

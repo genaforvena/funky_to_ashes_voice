@@ -2,14 +2,71 @@ import json
 import hashlib
 import os
 import sys
+import subprocess
+import argparse
 from groq import Groq
 from pydub import AudioSegment
 from quotes_extractor import find_longest_phrase_matches
 from audio_downloader import search_youtube_video, download_audio, sanitize_filename
 
+# Check for required environment variables
+GENIUS_TOKEN = os.getenv("GENIUS_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+def check_environment():
+    """
+    Check if all required environment variables are set and FFmpeg is installed.
+    Returns True if all checks pass, False otherwise.
+    """
+    all_checks_passed = True
+    
+    # Check for GENIUS_TOKEN
+    if not GENIUS_TOKEN:
+        print("Error: GENIUS_TOKEN environment variable is not set.")
+        print("Please set it using:")
+        print("  export GENIUS_TOKEN='your_genius_api_key'  # On Linux/macOS")
+        print("  set GENIUS_TOKEN=your_genius_api_key  # On Windows")
+        all_checks_passed = False
+    
+    # Check for GROQ_API_KEY
+    if not GROQ_API_KEY:
+        print("Error: GROQ_API_KEY environment variable is not set.")
+        print("Please set it using:")
+        print("  export GROQ_API_KEY='your_groq_api_key'  # On Linux/macOS")
+        print("  set GROQ_API_KEY=your_groq_api_key  # On Windows")
+        all_checks_passed = False
+    
+    # Check for FFmpeg
+    try:
+        result = subprocess.run(["ffmpeg", "-version"], 
+                               stdout=subprocess.PIPE, 
+                               stderr=subprocess.PIPE, 
+                               text=True)
+        if result.returncode != 0:
+            raise Exception("FFmpeg command returned non-zero exit code")
+    except Exception as e:
+        print("Error: FFmpeg is not installed or not in PATH.")
+        print("Please install FFmpeg:")
+        print("  - Windows: Download from https://ffmpeg.org/download.html and add to PATH")
+        print("  - macOS: brew install ffmpeg")
+        print("  - Linux: sudo apt-get install ffmpeg")
+        all_checks_passed = False
+    
+    return all_checks_passed
+
 
 def transcribe_audio_groq(audio_path):
-    client = Groq()
+    """
+    Transcribe audio using the Groq API.
+    
+    Args:
+        audio_path (str): Path to the audio file to transcribe
+        
+    Returns:
+        tuple: (transcription_text, segments) where segments is a list of 
+               (text, start_ms, end_ms) tuples
+    """
+    client = Groq(api_key=GROQ_API_KEY)
     filename = audio_path  # Path to your audio file
 
     print(f"Transcribing audio file: {filename}")
@@ -37,6 +94,16 @@ def transcribe_audio_groq(audio_path):
 
 
 def find_phrases_in_transcription(phrases, timestamps):
+    """
+    Find phrases in the transcription timestamps.
+    
+    Args:
+        phrases (list): List of phrases to find
+        timestamps (list): List of (text, start, end) tuples from transcription
+        
+    Returns:
+        dict: Dictionary mapping phrases to their start and end timestamps
+    """
     phrase_segments = {}
     for phrase in phrases:
         phrase_lower = phrase.lower()
@@ -48,6 +115,17 @@ def find_phrases_in_transcription(phrases, timestamps):
 
 
 def assemble_audio_segments(audio_path, phrase_segments, phrase_order):
+    """
+    Assemble audio segments from the original audio based on phrase segments.
+    
+    Args:
+        audio_path (str): Path to the original audio file
+        phrase_segments (dict): Dictionary mapping phrases to their start and end timestamps
+        phrase_order (list): List of phrases in the order they should appear in the output
+        
+    Returns:
+        AudioSegment: The assembled audio segments
+    """
     audio = AudioSegment.from_file(audio_path)
     output_audio = AudioSegment.silent(duration=0)
 
@@ -63,54 +141,35 @@ def assemble_audio_segments(audio_path, phrase_segments, phrase_order):
 
 
 def tokenize_input_text(input_text):
+    """
+    Tokenize input text into words.
+    
+    Args:
+        input_text (str): The input text to tokenize
+        
+    Returns:
+        set: Set of tokens (words) from the input text
+    """
     import re
     # Remove punctuation and convert to lowercase
     tokens = re.findall(r'\b\w+\b', input_text.lower())
     return set(tokens)
 
 
-def transcribe_audio_with_word_timestamps(audio_path):
-    client = Groq()
-
-    # Create a cache filename based on the audio file name
-    cache_filename = os.path.splitext(audio_path)[0] + '_transcription.json'
-
-    # Check if the cache file exists
-    if os.path.exists(cache_filename):
-        print(f"Loading cached transcription for '{audio_path}'")
-        with open(cache_filename, 'r', encoding='utf-8') as cache_file:
-            transcription_words = json.load(cache_file)
-        return transcription_words
-
-    print(f"Transcribing audio file: {audio_path}")
-    with open(audio_path, "rb") as file:
-        try:
-            transcription = client.audio.transcriptions.create(
-                file=(audio_path, file.read()),
-                model="whisper-large-v3-turbo",
-                response_format="verbose_json",
-            )
-        except Exception as e:
-            print(f"An error occurred during transcription with Groq: {e}", file=sys.stderr)
-            return []
-
-    # Process the transcription result
-    transcription_words = []
-    for segment in transcription.segments:
-        transcription_words.append({
-            'word': segment['text'].strip().lower(),
-            'start': float(segment['start']),
-            'end': float(segment['end'])
-        })
-
-    # Save the transcription to the cache file
-    with open(cache_filename, 'w', encoding='utf-8') as cache_file:
-        json.dump(transcription_words, cache_file, ensure_ascii=False, indent=2)
-
-    return transcription_words
+# This function has been moved below with improved caching
 
 
 def extract_audio_segments_by_words(audio_path, matching_segments):
+    """
+    Extract audio segments from the original audio based on word-level timestamps.
+    
+    Args:
+        audio_path (str): Path to the original audio file
+        matching_segments (list): List of dictionaries with start and end timestamps
+        
+    Returns:
+        AudioSegment: The extracted audio segments
+    """
     from pydub import AudioSegment
 
     audio = AudioSegment.from_file(audio_path)
@@ -130,6 +189,16 @@ def extract_audio_segments_by_words(audio_path, matching_segments):
     return output_audio
 
 def find_matching_word_segments(input_phrases, transcription_words):
+    """
+    Find segments in the transcription that match the input phrases.
+    
+    Args:
+        input_phrases (list): List of phrases to find
+        transcription_words (list): List of dictionaries with word, start, and end timestamps
+        
+    Returns:
+        list: List of dictionaries with phrase, start, and end timestamps
+    """
     # Concatenate transcription text and keep track of positions
     full_text = ''
     positions = []  # List of tuples (start_time, end_time, text)
@@ -175,6 +244,15 @@ def find_matching_word_segments(input_phrases, transcription_words):
 CACHE_DIR = 'cache'
 
 def get_file_checksum(file_path):
+    """
+    Calculate the MD5 checksum of a file.
+    
+    Args:
+        file_path (str): Path to the file
+        
+    Returns:
+        str: MD5 checksum of the file
+    """
     md5_hash = hashlib.md5()
     with open(file_path, "rb") as f:
         for byte_block in iter(lambda: f.read(4096), b""):
@@ -182,7 +260,17 @@ def get_file_checksum(file_path):
     return md5_hash.hexdigest()
 
 def transcribe_audio_with_word_timestamps(audio_path):
-    client = Groq()
+    """
+    Transcribe audio with word-level timestamps using the Groq API.
+    Uses caching to avoid re-transcribing the same audio file.
+    
+    Args:
+        audio_path (str): Path to the audio file to transcribe
+        
+    Returns:
+        list: List of dictionaries with word, start, and end timestamps
+    """
+    client = Groq(api_key=GROQ_API_KEY)
 
     if not os.path.exists(CACHE_DIR):
         os.makedirs(CACHE_DIR)
@@ -226,6 +314,16 @@ def transcribe_audio_with_word_timestamps(audio_path):
     return transcription_words
 
 def extract_audio_segments_by_phrases(audio_path, matching_segments):
+    """
+    Extract audio segments from the original audio based on phrase-level timestamps.
+    
+    Args:
+        audio_path (str): Path to the original audio file
+        matching_segments (list): List of dictionaries with start and end timestamps
+        
+    Returns:
+        AudioSegment: The extracted audio segments
+    """
     from pydub import AudioSegment
 
     audio = AudioSegment.from_file(audio_path)
@@ -245,6 +343,16 @@ def extract_audio_segments_by_phrases(audio_path, matching_segments):
     return output_audio
 
 def generate_audio_from_input(input_text):
+    """
+    Generate audio from input text by finding matching phrases in songs,
+    downloading the audio, transcribing it, and extracting the relevant segments.
+    
+    Args:
+        input_text (str): The input text to generate audio from
+        
+    Returns:
+        str: Path to the generated audio file, or None if generation failed
+    """
     # Step 1: Tokenize input text into phrases
     input_phrases = input_text.lower().split(' and ')
     print(f"Input phrases: {input_phrases}")
@@ -253,10 +361,13 @@ def generate_audio_from_input(input_text):
     matches = find_longest_phrase_matches(input_text)
     if not matches:
         print("No matches found in Genius.")
-        return
+        return None
 
     # Collect unique songs to process
-    unique_songs = {(match['title'], match['artist']) for match in matches}
+    unique_songs = set()
+    for phrase, song_info_list in matches:
+        for song_info in song_info_list:
+            unique_songs.add((song_info['title'], song_info['artist']))
 
     # Step 3: Process each song
     final_audio = AudioSegment.silent(duration=0)
@@ -302,13 +413,49 @@ def generate_audio_from_input(input_text):
 
     if len(final_audio) == 0:
         print("Failed to generate audio from the provided input.")
-        return
+        return None
 
     # Step 4: Export the final audio file
     output_filename = "final_output.mp3"
     final_audio.export(output_filename, format="mp3")
     print(f"\nGenerated audio saved as '{output_filename}'")
+    return output_filename
+
+def parse_arguments():
+    """
+    Parse command-line arguments.
+    
+    Returns:
+        argparse.Namespace: Parsed command-line arguments
+    """
+    parser = argparse.ArgumentParser(
+        description="Hip-Hop Voice Sampler: Create audio from matching phrases in hip-hop songs."
+    )
+    parser.add_argument(
+        "--text", "-t", 
+        type=str, 
+        help="Input text to generate audio from"
+    )
+    return parser.parse_args()
 
 if __name__ == "__main__":
-    user_input = "Be like a black hole never giving yourself away."
-    generate_audio_from_input(user_input)
+    # Parse command-line arguments
+    args = parse_arguments()
+    
+    # Check environment variables and FFmpeg
+    if not check_environment():
+        print("Environment check failed. Please fix the issues above and try again.")
+        sys.exit(1)
+    
+    # Use command-line input if provided, otherwise use default
+    user_input = args.text if args.text else "we gon be alright and we gon be together"
+    print(f"Using input text: '{user_input}'")
+    
+    # Generate audio from input
+    output_file = generate_audio_from_input(user_input)
+    
+    if output_file:
+        print(f"Success! Audio generated and saved as '{output_file}'")
+    else:
+        print("Failed to generate audio. Please check the error messages above.")
+        sys.exit(1)
