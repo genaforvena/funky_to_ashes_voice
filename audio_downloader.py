@@ -23,16 +23,8 @@ def search_youtube_video(title, artist):
             print("No videos found on YouTube for this song.")
             return None
 
-        videos = info['entries']
-        for video in videos:
-            if video is None:
-                continue
-            video_title = video.get('title', '').lower()
-            if title.lower() in video_title and artist.lower() in video_title:
-                return video['webpage_url']
-
-        # If no exact match is found, return the first video
-        return videos[0]['webpage_url']
+        # Return the first video found
+        return info['entries'][0]['webpage_url']
 
 
 def sanitize_filename(name):
@@ -51,7 +43,7 @@ def download_audio(youtube_url, output_audio):
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
-            'preferredquality': '192',
+            'preferredquality': '128',
         }],
         'quiet': False,  # Set to False to see output for debugging
         'no_warnings': True,
