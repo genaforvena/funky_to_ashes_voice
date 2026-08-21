@@ -1,53 +1,91 @@
 # funky to ashes voice
 
-Takes a text phrase, finds hip-hop songs whose lyrics contain it, downloads the audio, and stitches together the exact moments those words are sung into a new MP3.
+Type a sentence. Get it back as an mp3, spoken by other people's records — each word cut
+out of the track that happens to sing it, at the moment it is sung, instrumental and all.
 
-## How it works
+The instrumental bleeding through every word is the **point**, not an artefact. A word
+carries its own beat, key and room out of the mix with it; the result is a collage of
+strangers, not an imitation of a voice. Nothing here tries to make it sound clean.
 
-1. Searches [Genius](https://genius.com) for songs whose lyrics contain the longest possible substrings of your input text.
-2. Downloads audio for each matched song from YouTube via `yt-dlp`.
-3. Transcribes the audio with Groq (Whisper) to get word-level timestamps. Transcriptions are cached by file checksum so re-runs are fast.
-4. Extracts the audio segments where the matched phrases are spoken and crossfades them together.
-5. Exports the result as `final_output.mp3`.
+## How it finds the words
 
-## Requirements
+The hard question is not cutting — it is **which track**. Two different searches answer it:
 
-- Python 3.7+
-- FFmpeg on your PATH
-- A [Genius API key](https://genius.com/api-clients)
-- A [Groq API key](https://console.groq.com)
+1. **The whole line, first.** Maybe the sentence already exists as a quote somewhere. The
+   solver always tries the longest span before any shorter one, so if one track sings the
+   entire input, the output is one cut from one track.
+2. **What is left, out of the index.** Every source you add contributes its words to a
+   local index (`word → track, millisecond`). Searching it is a substring scan: instant,
+   offline, no API key, no rate limit, no model.
 
-## Setup
+When the whole line is not there, the sentence is **halved, and halved again** — always
+taking the longest span that exists anywhere, then recursing on what is left of either
+side. Fewest tracks is not optimised directly; it falls out of longest-first, because every
+extra span costs at least one more cut.
 
-```bash
-git clone https://github.com/genaforvena/funky_to_ashes_voice.git
-cd funky_to_ashes_voice
-pip install -r requirements.txt
-```
+Among spans of equal length, the **most central** one wins. Growing the window outward from
+the middle puts the seam on an *edge* of the phrase rather than at its start, so the output
+degrades gradually as the corpus thins instead of chopping off the first word.
 
-Set environment variables:
+When a word exists in no track at all, the fallback does **not** look for the
+closest-sounding substitute. It covers the word's letters with pieces of *other* words,
+preferring a source it has not just used — the tie-break is **variety, not similarity**. A
+collage of one voice is a bad voice; a collage of many is the instrument.
 
-```bash
-export GENIUS_TOKEN=your_genius_api_key
-export GROQ_API_KEY=your_groq_api_key
-```
+Every piece is labelled in the plan (`exact` / `sliced` / `missing`), so nothing approximate
+is ever passed off as a match.
 
-On Windows:
-
-```cmd
-set GENIUS_TOKEN=your_genius_api_key
-set GROQ_API_KEY=your_groq_api_key
-```
-
-## Usage
-
-Edit the `user_input` line at the bottom of `main.py` and run:
+## Use it
 
 ```bash
-python main.py
+python funky.py add "Nas - N.Y. State of Mind"      # url, video id, or free-text search
+python funky.py add https://www.youtube.com/watch?v=_JZom_gVfuw
+
+python funky.py find "it was all a dream"          # show the plan, render nothing
+python funky.py say  "it was all a dream" -o out.mp3
+python funky.py sources
 ```
 
-The output is saved as `final_output.mp3` in the current directory.
+```
+$ python funky.py find "be like a black hole never giving yourself away"
+2 cut(s) from 2 source(s)
+  [exact] 'be like a black hole'  1.98s  <- …
+  [exact] 'never giving yourself away'  2.31s  <- …
+```
+
+Needs `yt-dlp` and `ffmpeg` on PATH. That is all — **no Genius key, no Groq key, no GPU,
+no transcription model**.
+
+## Where the timestamps come from
+
+YouTube's own **automatic captions**, pulled once per source as `json3` (or `vtt`), which
+carry a start offset per word. No speech model runs anywhere in this project.
+
+Two things that are true and worth knowing before you build a corpus:
+
+* **A word's END is not published** — only its start. A cut therefore runs to the *next*
+  word's start and drags the instrumental tail in with it. That is the sound of the thing.
+* **Most official music videos cannot be indexed.** Their English track is the label's
+  lyric sheet: correctly spelled, beautifully punctuated, and timed *per line*. It looks
+  identical in shape to a machine transcript and it has no word timing at all. Measured on
+  one video here, the machine track (`en-orig`) moves the clock at **100%** of word
+  boundaries and the lyric sheet at **13%** — same file extension, same JSON. So the
+  granularity is read off the *timestamps*, never the format, and a line-level source is
+  refused rather than indexed into word-shaped rows that are all secretly whole lines.
+  Lyric-video uploads and anything speech-heavy index far more reliably than official
+  uploads.
+
+## What this replaced
+
+The previous version asked Groq for `verbose_json` **without** `timestamp_granularities`,
+so it received whole sung *lines*, stored each line in a field named `word`, and computed
+character offsets across the concatenation. The README promised word-level cutting the code
+could not produce. It also searched Genius **lyrics** and cut against a Whisper
+**transcript** — two different alphabets, so a phrase present in one was silently absent
+from the other. And it paid a search, a download and a transcription *per phrase*, which
+made a sentence expensive and a second sentence just as expensive again.
+
+Same idea, none of the keys, and the corpus is built once.
 
 ## License
 

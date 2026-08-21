@@ -1,4 +1,11 @@
-lyricsgenius
-yt-dlp
-groq
-pydub
+# Nothing to install for the tool itself — it drives two binaries.
+#
+#   yt-dlp   on PATH  (sources + captions)
+#   ffmpeg   on PATH  (cutting + concat)
+#
+# The old stack (lyricsgenius / groq / pydub) is gone: the timestamps come from
+# YouTube's own auto-captions and the cutting is ffmpeg, so no API key and no
+# speech model is involved anywhere.
+#
+# For the tests only:
+pytest
